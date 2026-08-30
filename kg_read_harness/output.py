@@ -28,11 +28,11 @@ MAX_LINE_WIDTH = 118
 #: Width used to wrap long descriptions.
 WRAP_WIDTH = 96
 
-_UNICODE = {"arrow": "──▶", "dash": "──", "turn": "↳", "to": "→"}
-_ASCII = {"arrow": "-->", "dash": "--", "turn": ">", "to": "->"}
+_UNICODE = {"arrow": "──▶", "dash": "──", "turn": "↳", "to": "→", "em": "—"}
+_ASCII = {"arrow": "-->", "dash": "--", "turn": ">", "to": "->", "em": "-"}
 
 
-def _glyphs(stream: IO[str]) -> dict[str, str]:
+def glyphs(stream: IO[str]) -> dict[str, str]:
     """Prefer box-drawing glyphs, fall back to ASCII if the stream can't encode them."""
     encoding = getattr(stream, "encoding", None) or "ascii"
     try:
@@ -88,7 +88,7 @@ class TableWriter(_WriterBase):
     """Human-readable listing: `source (TYPE) --[description]--> target (TYPE)`."""
 
     def write(self, bundle: Bundle) -> None:
-        g = _glyphs(self.stream)
+        g = glyphs(self.stream)
         self.count += 1
         index = f"[{self.count:>4}]"
         description = collapse(bundle.description)
@@ -176,7 +176,7 @@ def print_warnings(warnings: Iterable[str], stream: IO[str]) -> None:
 
 def print_summary(summary: Summary, stream: IO[str], skipped: int = 0) -> None:
     """The type-pair table and grand total (FR-7)."""
-    g = _glyphs(stream)
+    g = glyphs(stream)
     rows = summary.rows()
     source_width = max([len("SOURCE TYPE")] + [len(r[0]) for r in rows])
     target_width = max([len("TARGET TYPE")] + [len(r[1]) for r in rows])
