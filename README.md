@@ -1,7 +1,8 @@
 # G.R.A.S.P
 
-**GraphRAG → Action** — the bridge that turns an AutoGraph knowledge graph into a
-typed planning graph. **All five bridge stations are built.**
+**GraphRAG → Action** — an AutoGraph knowledge graph becomes a typed planning
+graph, and a natural-language command becomes an ordered, executable plan.
+**All five bridge stations plus Layer 2 planning are built.**
 
 | Station | What it does | Status |
 | --- | --- | --- |
@@ -10,6 +11,7 @@ typed planning graph. **All five bridge stations are built.**
 | 3 · LLM disambiguate | resolve `requires` vs `produces` | not started |
 | 4 · Normalize direction & order | settle head → tail, derive `precedes` | built (`direction_normalizer/`) |
 | 5 · Write | persist to the PlanGraph | built (`plangraph_writer/`) |
+| **Layer 2** · Planning | command → goal → subgraph → ordered `plan.json` | built (`layer2_planning/`) |
 
 ---
 
@@ -736,6 +738,161 @@ python demo_write_offline.py                # write, re-write, read back, offlin
 ```
 
 
+---
+
+## Layer 2 — Planning
+
+**From a natural-language command to an ordered `plan.json`.**
+
+```
+command -> goal resolution -> subgraph traversal -> topological sort -> plan.json
+```
+
+Read-only over the PlanGraph. Implements `PRD_Layer2_Planning.docx`.
+
+Two decisions define its shape, and both are about restraint: **the LLM's role is
+thin** — it phrases, it never orders or invents — and retrieval is a **single
+forward traversal**, not a backward-chaining planner. Similarity search only
+locates the starting point; the graph's structure supplies correctness and order.
+
+### The four stages
+
+**1 · Goal resolution.** Score the command against the Skills and take the best
+match if it clears the threshold. Below threshold, or two candidates within the
+tie margin, it **asks rather than guesses** — a wrong goal produces a confident,
+fluent, entirely wrong plan.
+
+**2 · Subgraph traversal.** From the goal skill, walk the named graph bounded to
+that `skill_scope`, gathering the precondition-closed subgraph.
+
+**3 · Ordering.** Topological sort over two independent sources of constraint:
+the `precedes` edges Station 4 wrote, *and* the produces→requires state chain
+recomputed from the subgraph. On a bridge-built graph they agree exactly —
+recomputing is not redundant, it means Layer 2 still orders correctly against a
+PlanGraph whose `precedes` edges are missing. Ties break by name; a cycle is a
+hard error naming the offending edges.
+
+**4 · Composition.** The order is already fixed. The LLM only phrases each step.
+
+### The grounding guard
+
+The composed steps must map **one-to-one and in the same order** to the primitives
+from Stage 3. If they don't, the reply is rejected, reprompted once, then
+abandoned for templated phrasing. A model that reorders, drops, adds or renames a
+step cannot affect the plan — there is a test that hands the composer a
+deliberately reversed reply and asserts the plan comes back in the correct order
+with `composer: template`.
+
+That is what `--no-llm` demonstrates directly: the same plan, plainly worded.
+
+```bash
+python plan_command.py "make me a chai"            # LLM phrasing
+python plan_command.py "make me a chai" --no-llm   # identical order, templated
+python plan_command.py "fold my t-shirt" --format json > plan.json
+```
+
+### Live, against the real PlanGraph
+
+```
+  command            "make me a chai"
+  goal               MAKE MASALA CHAI
+  match              0.64 (lexical)
+  composer           llm (anthropic/claude-opus-5)
+  ordering           11 constraint(s): 11 from precedes edges, 11 from the state chain
+
+   1. Place the pan on the stove.          7. Stir sugar into the brewing tea.
+   2. Pour water into the pan.             8. Let the tea simmer until brewed.
+   3. Turn on the stove.                   9. Strain the tea into the cup.
+   4. Heat the water until it boils.      10. Serve the cup of chai.
+   5. Add tea leaves to the water.        11. Turn off the stove.
+   6. Pour milk into the brewing tea.
+```
+
+The step *order* is byte-identical with and without the LLM. Only the wording
+changes.
+
+### Goal resolution without the vector index
+
+Station 5's Skills vector index needs AutoGraph's embed-field endpoint, which
+isn't configured, so `VectorRetriever` reports itself unavailable and the planner
+falls back to a **TF-IDF cosine** over the same Skills descriptions.
+
+IDF is what makes that work here: three of the six skills begin with "make", so
+the word carries almost no signal while "chai" identifies one. Skill names are
+weighted above their prose because a command names the task, and a token matches
+a longer one containing it, so "plants" reaches `water_houseplants` and "shirt"
+reaches `fold_tshirt`.
+
+The fallback keeps the **threshold and tie-margin semantics identical**, so the
+guardrail is unaffected — and `meta.match_method` records which retriever ran, so
+a plan never silently claims a vector match it didn't have.
+
+### The `plan.json` contract
+
+```json
+{
+  "goal": "MAKE MASALA CHAI",
+  "command": "make me a chai",
+  "steps": [
+    {"order": 1, "action": "PLACE PAN", "description": "Place the pan on the stove.",
+     "requires": [], "produces": ["PAN ON STOVE"], "uses": []}
+  ],
+  "meta": {"skill_scope": "make_masala_chai", "generated_at": "...",
+           "model_id": "anthropic/claude-opus-5", "match_confidence": 0.64,
+           "match_method": "lexical", "composer": "llm", "ordering": {...}}
+}
+```
+
+`description` is the only LLM-authored field. `order`, `action`, `requires`,
+`produces` and `uses` all come straight off the graph.
+
+### The corpus
+
+`dataset/` holds five more rulebooks — coffee, burger, t-shirt, bed, houseplants
+— and only chai has been through AutoGraph. `tests/rulebook_fixture.py` parses
+the rest into Station 1 bundles so the whole bridge can run on all six offline.
+It is a **test fixture standing in for AutoGraph extraction**, not a product
+component: it exploits the fact that the rulebooks share one rigid template.
+
+What it buys is a real test of per-task scoping. All six PlanGraphs live in one
+database and share names — chai and burger both have `turn_on_stove` and `serve`
+— and each plan contains only its own steps.
+
+| Command | Resolves to | Match |
+| --- | --- | --- |
+| "make me a masala chai" | `make_masala_chai` | 0.88 |
+| "I want a cup of pour over coffee" | `make_pour_over_coffee` | 0.92 |
+| "fold my t-shirt" | `fold_tshirt` | 0.70 |
+| "make the bed" | `make_bed` | 0.82 |
+| "water the houseplants" | `water_houseplants` | 0.88 |
+| "cook a burger" | `cook_burger` | 0.89 |
+| "please reticulate the splines" | — | clarification |
+
+Every plan respects every ordering constraint its rulebook states, including the
+one the PRD calls out: `assemble_burger` comes after both `add_cheese` and
+`toast_buns`.
+
+### Exit codes
+
+`0` a plan · `3` clarification needed · `4` incomplete PlanGraph · `5` a cycle.
+
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PLANNER_THRESHOLD` | `0.35` | match score required to accept a goal |
+| `PLANNER_TIE_MARGIN` | `0.05` | closer than this and the match is ambiguous |
+| `PLANNER_TOP_K` | `3` | candidates offered on clarification |
+| `PLANNER_MODEL` | `LLM_MODEL` | overrides the model for phrasing only |
+
+### Verify
+
+```bash
+python -m unittest discover -s tests -t .   # 562 tests, no network, no database
+python demo_plan_offline.py                 # all six rulebooks, offline, no LLM
+```
+
+
 ## The bundle contract
 
 One bundle per relationship (PRD Section 7). This is the canonical unit passed to
@@ -827,6 +984,17 @@ kg_read_harness/          Station 1 — Read
   output.py     table + JSON listing, type-pair summary      (FR-6, FR-7)
   errors.py     typed failures, hints, exit codes            (FR-8)
   cli.py        one-shot entry point
+layer2_planning/          Layer 2 — Planning
+  config.py     threshold, top-k, model                       (Section 9)
+  retrieve.py   Stage 1: goal resolution + the guardrail      (FR-2)
+  traverse.py   Stage 2: scoped forward traversal             (FR-3)
+  order.py      Stage 3: topological sort, two constraint     (FR-4)
+                sources, cycle = hard error
+  compose.py    Stage 4: thin LLM + the grounding guard       (FR-5, FR-6)
+  plan.py       the plan.json contract                        (Section 6)
+  pipeline.py   the four stages in sequence
+  report.py     terminal rendering
+  cli.py        entry point
 plangraph_writer/         Station 5 — The PlanGraph & Writer
   schema.py     collections, edge types, the named graph      (Section 4)
   identity.py   scoped vertex keys, hashed edge keys          (Section 5, FR-2)
@@ -871,17 +1039,21 @@ classify_kg.py             Station 2 launcher
 disambiguate_kg.py         Station 3 launcher
 normalize_kg.py            Station 4 launcher
 write_plangraph.py         Station 5 launcher (dry run unless --write)
+plan_command.py            Layer 2 launcher: a command in, plan.json out
 eval_chai_live.py          Station 3 accuracy eval vs. the answer key
 demo_chai_offline.py       Station 1 offline self-check
 demo_classify_offline.py   Station 2 offline self-check
 demo_disambiguate_offline.py  Station 3 offline self-check
 demo_normalize_offline.py     Station 4 offline self-check
 demo_write_offline.py         Station 5 offline self-check
+demo_plan_offline.py          Layer 2 offline self-check, all six rulebooks
+dataset/                      five more rulebooks
 tests/                     unit + end-to-end tests, fake ArangoDB, chai fixture
 ```
 
 ## Out of scope
 
-Layer 2 planning (goal resolution and plan composition), the whole-graph
-validation wrapper, incremental or streaming updates, a persistent service or
-API, and any UI beyond the terminal.
+Layer 3 (ROS execution of `plan.json`), the whole-graph validation wrapper,
+backward-chaining and goal-state commands, multi-skill composition, incremental
+or streaming updates, a persistent service or API, and any UI beyond the
+terminal.

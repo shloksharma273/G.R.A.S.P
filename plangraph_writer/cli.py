@@ -26,6 +26,7 @@ from kg_read_harness.errors import (
 from . import __version__
 from .build import build
 from .config import load_writer_config
+from .partition import partition_by_skill, skills_in
 from .records import PlanGraphBuild, WriteReport
 from .report import dump_json, exit_code_for, print_report
 from .writer import write_plangraph
@@ -83,6 +84,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--scope", metavar="NAME", help="skill scope; overrides SKILL_SCOPE and inference"
     )
+    parser.add_argument(
+        "--all-skills",
+        action="store_true",
+        help=(
+            "write every skill in the input as its own scope. Use when one AutoGraph "
+            "project holds several rulebooks."
+        ),
+    )
     parser.add_argument("--version", action="version", version=f"plangraph-writer {__version__}")
     return parser
 
@@ -121,6 +130,7 @@ def run(
     output_format: str = "table",
     listing: bool = True,
     scope: str | None = None,
+    all_skills: bool = False,
     stdout: IO[str] | None = None,
     stdin: IO[str] | None = None,
     db: Any = None,
@@ -130,6 +140,10 @@ def run(
 
     config = load_writer_config(dry_run=not write)
     finalized, derived = streams if streams is not None else load_streams(from_json, stdin)
+    handle = connect(config.arango) if db is None else db
+
+    if all_skills:
+        return _write_every_skill(finalized, derived, handle, config, output_format, listing, stdout)
 
     plan: PlanGraphBuild = build(
         finalized,
@@ -138,8 +152,6 @@ def run(
         skill_scope=scope or config.skill_scope,
         build_id=config.build_id,
     )
-
-    handle = connect(config.arango) if db is None else db
     report: WriteReport = write_plangraph(plan, handle, config)
 
     if output_format == "json":
@@ -147,6 +159,53 @@ def run(
     else:
         print_report(config, plan, report, stdout, listing=listing)
     return exit_code_for(report)
+
+
+def _write_every_skill(finalized, derived, handle, config, output_format, listing, stdout) -> int:
+    """One scoped write per skill, from a project holding several rulebooks."""
+    partitions = partition_by_skill(finalized, derived)
+    if not partitions:
+        raise ConfigError(
+            "no skill in the input decomposes into any primitive, so there is "
+            "nothing to write.",
+            "check that AutoGraph extracted SKILL -> PRIMITIVE relationships; a skill "
+            "with no decomposition cannot be planned.",
+        )
+
+    results = []
+    worst = 0
+    for partition in partitions:
+        plan = build(
+            partition.finalized,
+            partition.derived,
+            config.schema,
+            skill_scope=partition.scope,
+            build_id=config.build_id,
+        )
+        report = write_plangraph(plan, handle, config)
+        results.append((partition, plan, report))
+        worst = max(worst, exit_code_for(report))
+
+    if output_format == "json":
+        json.dump(
+            {
+                "skills": [
+                    {"skill": p.skill, "scope": p.scope, "plan": b.to_dict(), "write": r.to_dict()}
+                    for p, b, r in results
+                ]
+            },
+            stdout,
+            indent=2,
+            ensure_ascii=False,
+        )
+        stdout.write("\n")
+    else:
+        for index, (partition, plan, report) in enumerate(results):
+            if index:
+                print("", file=stdout)
+            print(f"### {partition.skill}  (scope: {partition.scope})", file=stdout)
+            print_report(config, plan, report, stdout, listing=listing)
+    return worst
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -158,6 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_format=args.format,
             listing=not args.no_listing,
             scope=args.scope,
+            all_skills=args.all_skills,
         )
     except HarnessError as error:
         print(error.render(), file=sys.stderr)

@@ -180,6 +180,12 @@ class FakeWritableDatabase:
         r"FOR doc IN @@collection\s+FILTER doc\.skill_scope == @scope\s+RETURN doc",
         re.IGNORECASE,
     )
+    _TRAVERSE = re.compile(
+        r"FOR v IN 1\.\.@depth OUTBOUND @start GRAPH @graph", re.IGNORECASE
+    )
+    _SCOPE_EDGES = re.compile(
+        r"FOR e IN @@edges\s+FILTER e\.skill_scope == @scope", re.IGNORECASE
+    )
     _REMOVE_SCOPE = re.compile(
         r"FOR doc IN @@collection\s+FILTER doc\.skill_scope == @scope\s+REMOVE",
         re.IGNORECASE,
@@ -190,6 +196,21 @@ class FakeWritableDatabase:
         normalized = " ".join(query.split())
         collection_name = bind_vars.get("@collection")
         scope = bind_vars.get("scope")
+
+        if self._TRAVERSE.search(normalized):
+            return self._traverse(bind_vars)
+
+        if self._SCOPE_EDGES.search(normalized):
+            collection = self.collection(bind_vars["@edges"])
+            return [
+                dict(e)
+                for _, e in sorted(collection.documents.items())
+                if e.get("skill_scope") == scope
+            ]
+
+        if normalized.startswith("FOR s IN @@skills"):
+            collection = self.collection(bind_vars["@skills"])
+            return [dict(d) for _, d in sorted(collection.documents.items())]
 
         if self._REMOVE_SCOPE.search(normalized):
             collection = self.collection(collection_name)
@@ -222,6 +243,50 @@ class FakeWritableDatabase:
             ]
 
         raise NotImplementedError(f"the fake database does not implement: {normalized[:120]}")
+
+    def _traverse(self, bind_vars: dict[str, Any]) -> list[Any]:
+        """Breadth-first OUTBOUND walk, the one traversal shape Layer 2 issues."""
+        start = bind_vars["start"]
+        scope = bind_vars.get("scope")
+        depth = int(bind_vars.get("depth", 8))
+
+        outgoing: dict[str, list[dict[str, Any]]] = {}
+        for collection in self._collections.values():
+            if not collection.edge or collection.foreign:
+                continue
+            for edge in collection.documents.values():
+                outgoing.setdefault(edge["_from"], []).append(edge)
+
+        vertices: dict[str, dict[str, Any]] = {}
+        for collection in self._collections.values():
+            if collection.edge or collection.foreign:
+                continue
+            for document in collection.documents.values():
+                vertices[document["_id"]] = document
+
+        # `uniqueVertices: global` — each vertex is returned once and never
+        # approached again. Reproducing that exactly is what makes this double
+        # useful: a traversal that also returned every edge would hide the fact
+        # that the real one does not.
+        rows: list[dict[str, Any]] = []
+        seen = {start}
+        frontier = [start]
+        for _ in range(depth):
+            nxt: list[str] = []
+            for node in frontier:
+                for edge in sorted(outgoing.get(node, ()), key=lambda e: e["_key"]):
+                    target = vertices.get(edge["_to"])
+                    if target is None or edge["_to"] in seen:
+                        continue
+                    if scope is not None and target.get("skill_scope") != scope:
+                        continue
+                    seen.add(edge["_to"])
+                    nxt.append(edge["_to"])
+                    rows.append(dict(target))
+            frontier = nxt
+            if not frontier:
+                break
+        return rows
 
 
 def make_db(**kwargs) -> FakeWritableDatabase:
