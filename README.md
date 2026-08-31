@@ -1,7 +1,7 @@
 # G.R.A.S.P
 
 **GraphRAG → Action** — the bridge that turns an AutoGraph knowledge graph into a
-typed planning graph. Four of the five bridge stations are built:
+typed planning graph. **All five bridge stations are built.**
 
 | Station | What it does | Status |
 | --- | --- | --- |
@@ -9,7 +9,7 @@ typed planning graph. Four of the five bridge stations are built:
 | 2 · Rule pre-classify | bundles → edge types by entity-type pair | built (`rule_preclassifier/`) |
 | 3 · LLM disambiguate | resolve `requires` vs `produces` | not started |
 | 4 · Normalize direction & order | settle head → tail, derive `precedes` | built (`direction_normalizer/`) |
-| 5 · Write | persist to the PlanGraph | not started |
+| 5 · Write | persist to the PlanGraph | built (`plangraph_writer/`) |
 
 ---
 
@@ -602,6 +602,140 @@ rather than piped through Station 3's own coverage — otherwise a gap in Statio
 Purity is enforced by the same AST walk Station 2 uses.
 
 
+---
+
+## Station 5 — The PlanGraph & Writer
+
+**From finalized edges to a persisted, traversable planning graph.**
+
+Defines the PlanGraph — the project's own typed dependency graph — and writes
+Station 4's output into it. This is the **only part of the project that mutates
+the database**, and the only one that deletes.
+
+Implements `PRD_PlanGraph_Writer.docx` (Bridge Station 5).
+
+### The schema
+
+| Collection | Holds |
+| --- | --- |
+| `{prefix}_Skills` | high-level tasks, one per rulebook |
+| `{prefix}_Primitives` | atomic robot actions |
+| `{prefix}_Objects` | physical things acted on |
+| `{prefix}_States` | world conditions |
+| `{prefix}_PlanEdges` | every edge, carrying a `type` attribute |
+
+One edge collection keeps traversal filtering simple; the named graph
+`{prefix}_PlanGraph` binds the endpoint types. Edge types are `decomposes_to`
+(Skill→Primitive), `requires` and `produces` (Primitive→State), `precedes`
+(Primitive→Primitive) and `uses` (Primitive→Object).
+
+The PlanGraph deliberately lives in its own collections, **separate from
+AutoGraph's `{project}_kg`** — AutoGraph owns and rebuilds its knowledge graph,
+and a rebuild would wipe anything stored there.
+
+### Identity is scoped per task
+
+A vertex key is `(skill_scope, normalized_name)`, e.g.
+`make_masala_chai__pan_on_stove`. Different rulebooks reuse the same words —
+"serve" appears in coffee, burger and chai — and merging them would let one
+recipe's edges bleed into another and corrupt its plan. Scoping prevents a
+coincidental shared `stove_on` from chaining actions across unrelated tasks.
+
+Edge keys are a hash of `(skill_scope, from, to, type)`, so a rebuild dedupes
+instead of accumulating. Vertex keys stay readable because a key you can read is
+worth a great deal when debugging a graph; they fall back to a hash suffix only
+when the readable form would exceed ArangoDB's limit.
+
+### Isolation is an allowlist, not a denylist
+
+The PRD asks only that AutoGraph's `{project}_kg` never be modified. But the live
+pilot database is **shared** — it holds `AIS-1847_test_*`, `E2E_test_*`,
+`api_test_project_*`, `plannerTest_*` and more beside our own. A denylist of
+AutoGraph's names would have been a list that silently goes stale.
+
+So every mutating call goes through `GuardedDatabase`, which permits exactly the
+five PlanGraph collections and refuses everything else — creates, writes,
+deletes, index builds, graph definitions, and any AQL write query naming a
+collection outside the set. There is one place to audit rather than a convention
+to remember. The offline test double is seeded with the other projects'
+collections and raises if any of them is touched, so the guarantee is tested from
+both sides.
+
+### Running it — the default is a dry run
+
+```bash
+python normalize_kg.py --format json > s4.json
+python write_plangraph.py --from-json s4.json           # DRY RUN: touches nothing
+python write_plangraph.py --from-json s4.json --write   # applies
+python write_plangraph.py --write                       # Stations 1-5 end to end
+```
+
+Because a scoped rebuild **deletes** the task's existing subgraph before
+rewriting it, a plain run plans the whole write, reads back what would be purged,
+and touches nothing. `--write` is required to apply.
+
+### Rebuild semantics
+
+Re-running for a task is a **scoped rebuild**: delete that `skill_scope`'s
+vertices and edges, then rewrite from the current run. No stale edge survives a
+rulebook change, and other tasks are untouched. Where the deployment supports
+stream transactions the purge and rewrite run inside one, so a task is never left
+half-written.
+
+`build_id` is a **hash of the input**, not a timestamp. Section 10 requires that
+identical input yields an identical PlanGraph, and a clock would make every
+re-run differ in every document — so re-running unchanged input is a genuine
+no-op rather than a no-op that rewrites every field.
+
+### Provenance
+
+Every edge carries `type`, `method` (`rule` | `lexical` | `llm` | `derived`),
+`confidence`, `evidence` (the original RELATED_TO description), `src_relation`,
+and for a derived edge the state and relation keys it was chained from. Every
+vertex and edge carries `skill_scope` and `build_id`. Any element of the planning
+graph can be walked back to the sentence that caused it.
+
+### The vector index
+
+FR-6 calls AutoGraph's `embed-field-in-collection` endpoint over the Skills
+`description` field. That endpoint's contract is AutoGraph's, not ours, so its
+URL and payload are configuration rather than an assumption baked into code —
+with `AUTOGRAPH_URL` unset the index is reported as `not_configured`, which is the
+honest state rather than a silent success.
+
+Per Section 11, a missing or failing endpoint is **never** an error: the graph is
+written and traversable, and only goal resolution is degraded until the index
+exists. The skill's embedded text is its name plus the decomposition evidence —
+a command names the task, so the name has to be in what gets embedded.
+
+### The read contract
+
+`readback.read_subgraph(db, schema, scope)` returns what Layer 2 would traverse —
+the precondition-closed subgraph, ready for topological ordering. It is a
+*verification* helper, not the planner (Section 3 puts planning in Layer 2), but
+it is what makes acceptance criterion 4 checkable. On the chai graph it reads back
+11 primitives, 10 states, 8 objects, zero unmet preconditions, and sorts to the
+recipe.
+
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PLANGRAPH_PREFIX` | `PROJECT_NAME` | collection prefix |
+| `SKILL_SCOPE` | inferred | the task scope; inference requires exactly one skill |
+| `PLANGRAPH_BUILD_ID` | content hash | override the build identifier |
+| `PLANGRAPH_EMBEDDING_FIELD` | `description` | field the vector index covers |
+| `ARANGO_WRITE_USERNAME` / `_PASSWORD` | Station 1's | a writing user, if distinct |
+| `AUTOGRAPH_URL` / `AUTOGRAPH_API_KEY` | — | embed-field endpoint |
+
+### Verify
+
+```bash
+python -m unittest discover -s tests -t .   # 482 tests, no network, no database
+python demo_write_offline.py                # write, re-write, read back, offline
+```
+
+
 ## The bundle contract
 
 One bundle per relationship (PRD Section 7). This is the canonical unit passed to
@@ -693,6 +827,18 @@ kg_read_harness/          Station 1 — Read
   output.py     table + JSON listing, type-pair summary      (FR-6, FR-7)
   errors.py     typed failures, hints, exit codes            (FR-8)
   cli.py        one-shot entry point
+plangraph_writer/         Station 5 — The PlanGraph & Writer
+  schema.py     collections, edge types, the named graph      (Section 4)
+  identity.py   scoped vertex keys, hashed edge keys          (Section 5, FR-2)
+  config.py     env -> WriterConfig; credentials never printed
+  guard.py      the allowlist that confines every write       (FR-8)
+  records.py    PlanVertex, PlanEdge, the write plan          (Section 7)
+  build.py      Station 4 edges -> documents; pure, no I/O    (Section 6)
+  writer.py     ensure schema, purge scope, upsert, verify    (FR-1, 3, 4, 5, 7)
+  embed.py      the Skills vector index, degrading to pending (FR-6)
+  readback.py   the Layer 2 read contract, for verification   (Section 8)
+  report.py     the run summary
+  cli.py        entry point; dry run unless --write
 direction_normalizer/     Station 4 — Direction Normalizer & Order Resolver
   policy.py     canonical directions, trust hierarchy, cues    (Sections 5, 8)
   model.py      InputEdge + the three output streams           (Section 6)
@@ -724,15 +870,18 @@ read_kg.py                 Station 1 launcher
 classify_kg.py             Station 2 launcher
 disambiguate_kg.py         Station 3 launcher
 normalize_kg.py            Station 4 launcher
+write_plangraph.py         Station 5 launcher (dry run unless --write)
 eval_chai_live.py          Station 3 accuracy eval vs. the answer key
 demo_chai_offline.py       Station 1 offline self-check
 demo_classify_offline.py   Station 2 offline self-check
 demo_disambiguate_offline.py  Station 3 offline self-check
 demo_normalize_offline.py     Station 4 offline self-check
+demo_write_offline.py         Station 5 offline self-check
 tests/                     unit + end-to-end tests, fake ArangoDB, chai fixture
 ```
 
 ## Out of scope
 
-Station 5, the PlanGraph write model, incremental or streaming updates, a
-persistent service or API, and any UI beyond the terminal.
+Layer 2 planning (goal resolution and plan composition), the whole-graph
+validation wrapper, incremental or streaming updates, a persistent service or
+API, and any UI beyond the terminal.
