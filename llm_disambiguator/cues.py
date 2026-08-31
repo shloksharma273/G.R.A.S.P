@@ -64,19 +64,28 @@ PRODUCES_CUES = (
 )
 
 
-def _compile(cues: tuple[str, ...]) -> re.Pattern[str]:
+def compile_cues(cues: tuple[str, ...]) -> re.Pattern[str]:
+    """One alternation matching any cue on word boundaries, longest first.
+
+    Public because Station 4 builds its ordering cue lists with the same
+    machinery rather than a copy of it.
+    """
     ordered = sorted(cues, key=len, reverse=True)
     return re.compile(r"\b(" + "|".join(re.escape(cue) for cue in ordered) + r")\b")
 
 
-REQUIRES_PATTERN = _compile(REQUIRES_CUES)
-PRODUCES_PATTERN = _compile(PRODUCES_CUES)
+def find_cues(pattern: re.Pattern[str], text: str) -> tuple[str, ...]:
+    """The distinct cues `pattern` finds in `text`, in order of appearance."""
+    return tuple(dict.fromkeys(pattern.findall((text or "").lower())))
+
+
+REQUIRES_PATTERN = compile_cues(REQUIRES_CUES)
+PRODUCES_PATTERN = compile_cues(PRODUCES_CUES)
 
 
 def matches(description: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The requires-cues and produces-cues present in `description`."""
-    text = (description or "").lower()
     return (
-        tuple(dict.fromkeys(REQUIRES_PATTERN.findall(text))),
-        tuple(dict.fromkeys(PRODUCES_PATTERN.findall(text))),
+        find_cues(REQUIRES_PATTERN, description),
+        find_cues(PRODUCES_PATTERN, description),
     )

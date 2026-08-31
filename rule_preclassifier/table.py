@@ -106,6 +106,10 @@ LOW_CONFIDENCE = "low_confidence"
 UNCLEAR = "unclear"
 SERVICE_ERROR = "service_error"
 
+#: Contributed by Station 4 (Direction Normalizer): an edge whose direction would
+#: close a cycle in the ordering graph. A graph with a cycle is not a plan.
+CREATES_CYCLE = "creates_cycle"
+
 #: Which diagnostic group each code belongs to, and what a heavy pile means.
 REASON_GROUPS = {
     SUSPECT_TYPE: "B",
@@ -120,6 +124,7 @@ REASON_GROUPS = {
     LOW_CONFIDENCE: "C",
     UNCLEAR: "C",
     SERVICE_ERROR: "D",
+    CREATES_CYCLE: "C",
 }
 
 GROUP_MEANING = {
@@ -142,6 +147,7 @@ REASON_PRIORITY = (
     CONFLICTING_EDGE,
     LOW_CONFIDENCE,
     UNCLEAR,
+    CREATES_CYCLE,
     # D — clean the source
     EMPTY_DESCRIPTION,
     DANGLING_ENDPOINT,
@@ -171,9 +177,15 @@ EXPLANATORY_REASONS = frozenset({SUSPECT_TYPE, ALIAS_MISMATCH, UNMAPPED_PAIR})
 #: Codes no Station 2 rule can produce — Station 3 decides when they fire.
 STATION_3_REASONS = frozenset({LOW_CONFIDENCE, UNCLEAR, SERVICE_ERROR})
 
+#: Likewise for Station 4. `ambiguous_direction` and `conflicting_edge` are shared
+#: with Station 2 rather than duplicated: they mean the same thing wherever they
+#: are raised, which is the point of one taxonomy.
+STATION_4_REASONS = frozenset({CREATES_CYCLE})
+
 assert set(REASON_PRIORITY) == set(REASON_GROUPS), "every reason code needs a group"
 assert (
-    BLOCKING_REASONS | EXPLANATORY_REASONS | STATION_3_REASONS == set(REASON_PRIORITY)
+    BLOCKING_REASONS | EXPLANATORY_REASONS | STATION_3_REASONS | STATION_4_REASONS
+    == set(REASON_PRIORITY)
 ), "every reason code must be owned by exactly one station's routing rules"
 
 

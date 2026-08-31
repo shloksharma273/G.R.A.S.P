@@ -5,7 +5,12 @@ from __future__ import annotations
 import unittest
 
 from rule_preclassifier import classify
-from rule_preclassifier.table import GROUP_MEANING, REASON_PRIORITY, STATION_3_REASONS
+from rule_preclassifier.table import (
+    GROUP_MEANING,
+    REASON_PRIORITY,
+    STATION_3_REASONS,
+    STATION_4_REASONS,
+)
 
 from .station2_fixture import bundle
 
@@ -57,7 +62,9 @@ class ExactlyOneReasonTests(unittest.TestCase):
                 bundle("the_cup", "OBJECT", "stove_on", "STATE", relation_key="r2"),
             )
         }
-        self.assertEqual(produced, set(REASON_PRIORITY) - STATION_3_REASONS)
+        self.assertEqual(
+            produced, set(REASON_PRIORITY) - STATION_3_REASONS - STATION_4_REASONS
+        )
 
 
 class GroupBTests(unittest.TestCase):

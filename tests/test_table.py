@@ -84,13 +84,18 @@ class ReasonTaxonomyTests(unittest.TestCase):
         self.assertEqual(table.REASON_PRIORITY[-1], table.UNMAPPED_PAIR)
 
     def test_blocking_and_explanatory_partition_the_codes(self):
-        groups = (table.BLOCKING_REASONS, table.EXPLANATORY_REASONS, table.STATION_3_REASONS)
+        groups = (
+            table.BLOCKING_REASONS,
+            table.EXPLANATORY_REASONS,
+            table.STATION_3_REASONS,
+            table.STATION_4_REASONS,
+        )
         for first in range(len(groups)):
             for second in range(first + 1, len(groups)):
                 self.assertEqual(groups[first] & groups[second], set())
         self.assertEqual(set().union(*groups), set(table.REASON_PRIORITY))
 
-    def test_station_2_never_produces_a_station_3_code(self):
+    def test_station_2_never_produces_a_later_station_code(self):
         from rule_preclassifier import classify
         from .station2_fixture import bundle
 
@@ -99,7 +104,7 @@ class ReasonTaxonomyTests(unittest.TestCase):
             for pair in (("OBJECT", "STATE"), ("WIDGET", "PRIMITIVE"), ("STATE", "STATE"))
             for item in classify([bundle("x", pair[0], "y", pair[1])]).parked
         }
-        self.assertEqual(codes & table.STATION_3_REASONS, set())
+        self.assertEqual(codes & (table.STATION_3_REASONS | table.STATION_4_REASONS), set())
 
     def test_every_group_has_a_meaning(self):
         self.assertEqual(set(table.GROUP_MEANING), set(table.REASON_GROUPS.values()))

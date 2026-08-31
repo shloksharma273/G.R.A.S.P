@@ -1,14 +1,14 @@
 # G.R.A.S.P
 
 **GraphRAG → Action** — the bridge that turns an AutoGraph knowledge graph into a
-typed planning graph. Three of the five bridge stations are built:
+typed planning graph. Four of the five bridge stations are built:
 
 | Station | What it does | Status |
 | --- | --- | --- |
 | 1 · Read | KG → relationship bundles | built (`kg_read_harness/`) |
 | 2 · Rule pre-classify | bundles → edge types by entity-type pair | built (`rule_preclassifier/`) |
 | 3 · LLM disambiguate | resolve `requires` vs `produces` | not started |
-| 4 · Normalize direction | settle head → tail | not started |
+| 4 · Normalize direction & order | settle head → tail, derive `precedes` | built (`direction_normalizer/`) |
 | 5 · Write | persist to the PlanGraph | not started |
 
 ---
@@ -457,6 +457,151 @@ Every test runs against a scripted fake endpoint whose real transport raises if 
 test ever reaches it, so the suite cannot make a network call or spend money.
 
 
+---
+
+## Station 4 — Direction Normalizer & Order Resolver
+
+**From typed edges to an ordered DAG.**
+
+Two jobs, run in sequence. First every edge is forced to a canonical direction so
+the planner can make blind assumptions. Then — the part worth demonstrating —
+`precedes` ordering between primitives is **derived by state chaining**:
+
+> for any state S, every primitive that produces S precedes every primitive
+> that requires S.
+
+That reconstructs execution order the rulebook never states. Deterministic, no
+LLM: Station 3 remains the system's only model call.
+
+Implements `PRD_Direction_Normalizer.docx` (Bridge Station 4).
+
+### Job 1 — canonical direction
+
+| Edge type | Canonical direction | Method |
+| --- | --- | --- |
+| `decomposes_to` | SKILL → PRIMITIVE | flip if reversed |
+| `uses` | PRIMITIVE → OBJECT | flip if reversed |
+| `requires` | PRIMITIVE → STATE | flip if reversed |
+| `produces` | PRIMITIVE → STATE | flip if reversed |
+| `precedes` | earlier → later | trust hierarchy (Job 2) |
+
+A reversed edge is silently flipped — that is expected, not an error — and the
+record says `flipped: true` so nothing is lost. The bundle itself is never
+mutated: `head`/`tail` are added alongside the original `source`/`target`.
+
+### Job 2 — the trust hierarchy
+
+| Priority | Source of direction | Strength | Confidence |
+| --- | --- | --- | --- |
+| 1 | State chaining (produces S → requires S) | structural | 0.95 |
+| 2 | Description wording (before / after cues) | textual | 0.70 |
+| 3 | The orientation AutoGraph wrote | weak tiebreaker | 0.40 |
+| 4 | None of the above | — | park `ambiguous_direction` |
+
+Reconciliation follows from that ordering. A derived edge an explicit one agrees
+with is **confirmed** (confidence rises to 0.99, and the arrow is emitted once,
+not twice). A derived edge that **conflicts** with an explicit one wins, and the
+explicit loser is parked `conflicting_edge` — parked, never dropped, because a
+disagreement between the prose and the precondition graph is a finding worth
+reading. An explicit edge with no chain support is kept at whatever confidence
+its evidence earns.
+
+### The cycle guard
+
+Edges are added one at a time and any arrow whose tail already reaches its head
+is refused before it goes in, so the graph is never allowed to become cyclic
+rather than being audited afterwards. Only `precedes` needs guarding: in
+canonical form `requires` and `produces` both run PRIMITIVE → STATE, so those
+edges are bipartite with every arrow crossing the same way and cannot contain a
+cycle. Whole-graph auditing is the validation wrapper's job; this is the local
+guarantee that Station 4 never *introduces* one.
+
+A derived edge refused as cyclic is reported separately rather than parked — it
+is an addition, not an input, so conservation does not count it — and it means
+two actions each produce a state the other requires, which is a real modelling
+bug worth surfacing.
+
+### Run
+
+```bash
+python normalize_kg.py                    # Stations 1-4 against the KG
+python normalize_kg.py --format json      # finalized + derived + parked + the order
+python normalize_kg.py --no-listing       # summary and plan only
+
+python classify_kg.py --format json > s2.json
+python disambiguate_kg.py --from-json s2.json --format json > s3.json
+python normalize_kg.py --from-json s2.json s3.json     # no database, no API key
+```
+
+Station 2's stamped array carries `decomposes_to` / `uses` / `precedes`;
+Station 3's carries `requires` / `produces`. Chaining needs the second half, so
+passing Station 2's file alone derives no ordering.
+
+### The result on the live KG
+
+35 stamped edges in, 35 finalized, 0 parked, and **11 `precedes` edges derived
+that appear nowhere in the graph**:
+
+```
+  ADD MILK        -> SIMMER           via MILK ADDED
+  ADD SUGAR       -> SIMMER           via SUGAR ADDED
+  ADD TEA LEAVES  -> ADD MILK         via TEA BREWING
+  ADD TEA LEAVES  -> ADD SUGAR        via TEA BREWING
+  ADD WATER       -> BOIL WATER       via WATER IN PAN
+  BOIL WATER      -> ADD TEA LEAVES   via WATER BOILING
+  PLACE PAN       -> ADD WATER        via PAN ON STOVE
+  SIMMER          -> STRAIN           via TEA BREWED
+  SIMMER          -> TURN OFF STOVE   via TEA BREWED
+  STRAIN          -> SERVE            via TEA IN CUP
+  TURN ON STOVE   -> BOIL WATER       via STOVE ON
+```
+
+A topological sort of that graph is the recipe:
+
+```
+PLACE PAN -> ADD WATER -> TURN ON STOVE -> BOIL WATER -> ADD TEA LEAVES
+  -> ADD MILK -> ADD SUGAR -> SIMMER -> STRAIN -> SERVE -> TURN OFF STOVE
+```
+
+The KG contains **zero** explicit `precedes` edges — there are no
+primitive-to-primitive relations in it at all — so every one of those 11 orderings
+was worked out from the states the actions share. `derived_new: 11,
+derived_confirming_explicit: 0` in the summary is that fact stated numerically.
+
+### Traceability
+
+Every derived edge names the state it came through and both relation keys that
+justified it, so a surprising ordering can be walked back to the two sentences
+that caused it:
+
+```json
+{
+  "from": "PLACE PAN", "to": "ADD WATER", "via_state": "PAN ON STOVE",
+  "source_relation_keys": ["...:764484433:...", "...:764484436:..."],
+  "trace": "PLACE PAN produces PAN ON STOVE, which ADD WATER requires (... + ...)"
+}
+```
+
+### Conservation, with a wrinkle
+
+`|input| = |finalized| + |parked|` is asserted every run. **Derived edges are not
+counted** — they are additions, not inputs, so folding them into the invariant
+would make it meaningless. They are tracked and reported separately, which is
+what Section 6 asks for.
+
+### Verify
+
+```bash
+python -m unittest discover -s tests -t .   # 369 tests, no network, no database
+python demo_normalize_offline.py            # the chai plan, offline
+```
+
+Station 4's tests are fed a complete edge set built from the chai answer key
+rather than piped through Station 3's own coverage — otherwise a gap in Station
+3's pre-pass would show up as a Station 4 failure, which tests the wrong thing.
+Purity is enforced by the same AST walk Station 2 uses.
+
+
 ## The bundle contract
 
 One bundle per relationship (PRD Section 7). This is the canonical unit passed to
@@ -548,6 +693,15 @@ kg_read_harness/          Station 1 — Read
   output.py     table + JSON listing, type-pair summary      (FR-6, FR-7)
   errors.py     typed failures, hints, exit codes            (FR-8)
   cli.py        one-shot entry point
+direction_normalizer/     Station 4 — Direction Normalizer & Order Resolver
+  policy.py     canonical directions, trust hierarchy, cues    (Sections 5, 8)
+  model.py      InputEdge + the three output streams           (Section 6)
+  adapt.py      the only place that knows Station 2/3 shapes   (FR-1)
+  chaining.py   state chaining: produces S -> requires S       (FR-3)
+  cycles.py     the incremental cycle guard + topological sort (FR-6)
+  normalizer.py the pipeline: normalize, chain, reconcile      (FR-2, FR-4, FR-5)
+  report.py     the run summary and the plan                   (FR-8)
+  cli.py        entry point
 llm_disambiguator/        Station 3 — LLM Disambiguator
   config.py     env -> LLMConfig; the key is never printed     (Section 10)
   cues.py       the lexical cue lists                          (Sections 5, 6)
@@ -569,14 +723,16 @@ rule_preclassifier/       Station 2 — Rule Pre-Classifier
 read_kg.py                 Station 1 launcher
 classify_kg.py             Station 2 launcher
 disambiguate_kg.py         Station 3 launcher
+normalize_kg.py            Station 4 launcher
 eval_chai_live.py          Station 3 accuracy eval vs. the answer key
 demo_chai_offline.py       Station 1 offline self-check
 demo_classify_offline.py   Station 2 offline self-check
 demo_disambiguate_offline.py  Station 3 offline self-check
+demo_normalize_offline.py     Station 4 offline self-check
 tests/                     unit + end-to-end tests, fake ArangoDB, chai fixture
 ```
 
 ## Out of scope
 
-Stations 4–5, the PlanGraph write model, incremental or streaming updates, a
+Station 5, the PlanGraph write model, incremental or streaming updates, a
 persistent service or API, and any UI beyond the terminal.
