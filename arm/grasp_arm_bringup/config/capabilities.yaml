@@ -1,0 +1,29 @@
+generated_by: calibrate_reach.py
+note: Every waypoint of the step was IK-checked, not just the destination. Regenerate
+  after moving the board, the staging column, the robot, or any object size.
+pairs:
+  red_block:
+    vertex_a: true
+    vertex_b: true
+    vertex_c: true
+    dot_x: true
+    dot_y: true
+    dot_z: true
+  green_block:
+    vertex_a: true
+    vertex_b: true
+    vertex_c: true
+    dot_x: true
+    dot_y: true
+    dot_z: true
+  blue_block:
+    vertex_a: true
+    vertex_b: true
+    vertex_c: true
+    dot_x: true
+    dot_y: true
+    dot_z: true
+groups_feasible:
+  triangle: true
+  line: true
+waypoint_failures: {}

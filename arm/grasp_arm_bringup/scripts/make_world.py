@@ -127,6 +127,21 @@ def static_cylinder(name, radius, length, pose, color) -> str:
 </model>"""
 
 
+def marker(name: str, x: float, y: float, z: float, color: list[float],
+           radius: float = 0.030) -> str:
+    """A flat visual-only disc, so the demo shows where the named points are."""
+    return f"""<model name="{name}">
+  <static>true</static>
+  <pose>{x} {y} {z} 0 0 0</pose>
+  <link name="link">
+    <visual name="visual">
+      <geometry><cylinder><radius>{radius}</radius><length>0.002</length></cylinder></geometry>
+{indent(visual_material(color), 6)}
+    </visual>
+  </link>
+</model>"""
+
+
 def graspable(obj: dict) -> str:
     """A dynamic, grippable object with correct inertia."""
     name = obj["name"]
@@ -340,6 +355,23 @@ def main() -> int:
         static_box(pad["name"], [psx, psy, psz],
                    f"{px} {py} {top_z + psz / 2.0:.4f} 0 0 0", pad["color"])
     )
+
+    # Mark the named points on the board. Visual only -- no <collision>, or a
+    # block would come to rest on the marker instead of the pad and every
+    # placement check would be off by the marker's thickness.
+    sites = cfg.get("sites", {})
+    group_of = {
+        name: group
+        for group, names in sites.get("groups", {}).items()
+        for name in names
+    }
+    group_colour = {"triangle": [0.90, 0.35, 0.10], "line": [0.20, 0.55, 0.90]}
+    for place, (mx, my) in sites.get("places", {}).items():
+        colour = group_colour.get(group_of.get(place), [0.5, 0.5, 0.5])
+        chunks.append(marker(f"mark_{place}", mx, my, top_z + psz + 0.001, colour))
+    for name, (mx, my) in sites.get("staging", {}).items():
+        chunks.append(marker(f"stage_{name}", mx, my, top_z + 0.001,
+                             [0.45, 0.45, 0.45], radius=0.035))
 
     for obj in cfg["objects"]:
         chunks.append(graspable(obj))

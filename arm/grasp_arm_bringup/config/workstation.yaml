@@ -74,31 +74,34 @@ robot:
 # Widths stay in q ~ 0.30-0.36, where the 2F-85 pads are closest to parallel
 # and grip best; see gripper.gap_at_zero_mm for the width -> q mapping.
 objects:
-  - {name: red_cube,    type: box,      size: [0.05, 0.05, 0.05], mass: 0.10, color: [0.80, 0.15, 0.15], pose: [-0.11, 0.975, 0.775]}
-  - {name: green_cube,  type: box,      size: [0.05, 0.05, 0.05], mass: 0.10, color: [0.15, 0.65, 0.20], pose: [-0.05, 1.200, 0.775]}
-  - {name: blue_block,  type: box,      size: [0.055, 0.055, 0.055], mass: 0.12, color: [0.15, 0.30, 0.85], pose: [-0.11, 1.425, 0.7775], squeeze: 0.06}
+  - {name: red_block,   type: box, size: [0.050, 0.050, 0.050], mass: 0.10, color: [0.80, 0.15, 0.15], pose: [-0.04, 1.05, 0.7750]}
+  - {name: green_block, type: box, size: [0.050, 0.050, 0.050], mass: 0.10, color: [0.15, 0.65, 0.20], pose: [-0.04, 1.20, 0.7750]}
+  - {name: blue_block,  type: box, size: [0.055, 0.055, 0.055], mass: 0.12, color: [0.15, 0.30, 0.85], pose: [-0.04, 1.35, 0.7775], squeeze: 0.06}
 
 # Where things get placed. A flat pad, not a walled bin: nothing for the
 # gripper to clip on the way out, and the drop is verified from the object's
 # real pose rather than from bin geometry.
 place_pad:
   name: place_pad
-  centre: [0.22, 1.2]
-  size: [0.34, 0.34, 0.02]
+  # Moved in from x=0.22. The measured reachable band for a place pose is
+  # world x <= ~0.20 (see README, "the placeable region"); the old board put
+  # half its area outside it.
+  centre: [0.115, 1.20]
+  size: [0.23, 0.44, 0.02]
   color: [0.85, 0.75, 0.20]
-  # Drop slots on the pad, in world coords.
-  # Radius from base_link is kept under ~0.72 m; the Gen3's 0.902 m reach gets
-  # awkward past that with the wrist pointing straight down.
+  # Which named site each block goes to in the standalone demo. The
+  # G.R.A.S.P-driven path gets these from the plan instead.
   slots:
-    red_cube:   [0.10, 1.10]
-    green_cube: [0.10, 1.30]
-    blue_block: [0.17, 1.20]
-  drop_clearance: 0.06   # m above the pad surface to release
+    red_block:   vertex_a
+    green_block: vertex_b
+    blue_block:  vertex_c
+  drop_clearance: 0.06
 
 motion:
   # SRDF "Home" for the manipulator group.
   home: [0.0, 0.26, -2.27, 0.0, 0.96, 1.57]
-  approach_height: 0.12    # m above the grasp pose to line up from
+  # Tried in order; the first solvable one wins.
+  approach_heights: [0.12, 0.09, 0.07]
   lift_height: 0.12        # m to raise after closing
   release_gap: 0.012       # m between object bottom and the pad when released
   move_secs: 5.0           # floor for a long move; see max_joint_speed
@@ -117,3 +120,34 @@ verify:
   pick_min_rise: 0.04      # m the object must actually rise to count as picked
   place_xy_tol: 0.06       # m from the target slot centre
   place_z_tol: 0.03        # m from the expected resting height
+
+# ------------------------------------------------------------------- sites
+# The symbolic vocabulary the middleware binds to. This is the ONLY place
+# coordinates and names meet: G.R.A.S.P never sees a coordinate, and the arm
+# never sees "vertex_a" without looking it up here.
+sites:
+  # Minimum centre-to-centre distance between two SIMULTANEOUSLY OCCUPIED
+  # points. The open gripper spans 131 mm at the fingertips, so descending
+  # around one block needs this much room from its neighbours. Enforced at
+  # runtime against actual occupancy -- not statically between all six points,
+  # because the triangle and the line are never built at the same time.
+  clearance_min: 0.10
+
+  # Where blocks start: a column on the bare table, just off the board.
+  staging:
+    red_block:   [-0.04, 1.05]
+    green_block: [-0.04, 1.20]
+    blue_block:  [-0.04, 1.35]
+
+  # The six pre-decided destinations.
+  places:
+    vertex_a: [0.02, 1.06]
+    vertex_b: [0.06, 1.30]
+    vertex_c: [0.14, 1.20]
+    dot_x:    [0.08, 1.05]
+    dot_y:    [0.08, 1.20]
+    dot_z:    [0.08, 1.35]
+
+  groups:
+    triangle: [vertex_a, vertex_b, vertex_c]
+    line:     [dot_x, dot_y, dot_z]

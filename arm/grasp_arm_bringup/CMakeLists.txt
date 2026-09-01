@@ -24,6 +24,9 @@ install(
   PROGRAMS
     scripts/make_world.py
     scripts/pick_place.py
+    scripts/task_executor.py
+    scripts/calibrate_reach.py
+    scripts/plan_bridge.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

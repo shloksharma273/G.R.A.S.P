@@ -158,6 +158,17 @@ def launch_setup(context, *args, **kwargs):
             output="screen",
         )
 
+    # ---- the arm's skill server -------------------------------------------
+    # Started after the controllers, since it blocks on them at startup.
+    task_executor = Node(
+        package=PKG,
+        executable="task_executor.py",
+        name="task_executor",
+        output="screen",
+        parameters=[{"use_sim_time": True}],
+        condition=IfCondition(LaunchConfiguration("launch_executor")),
+    )
+
     jsb = spawner("joint_state_broadcaster")
     arm_controller = spawner("joint_trajectory_controller")
     # THE FIX: upstream never reaches this spawner on a gen3.
@@ -173,6 +184,7 @@ def launch_setup(context, *args, **kwargs):
             OnProcessExit(target_action=arm_controller, on_exit=[gripper_controller])
         ),
         RegisterEventHandler(OnProcessExit(target_action=gripper_controller, on_exit=[twist])),
+        RegisterEventHandler(OnProcessExit(target_action=twist, on_exit=[task_executor])),
     ]
 
     # ---- MoveIt ------------------------------------------------------------
@@ -218,6 +230,9 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "headless", default_value="false",
                 description="Run the Ignition server without the GUI."),
+            DeclareLaunchArgument(
+                "launch_executor", default_value="true",
+                description="Start the arm's task server (needed by pick_place / plan_bridge)."),
             DeclareLaunchArgument(
                 "launch_moveit", default_value="true",
                 description="Start move_group."),

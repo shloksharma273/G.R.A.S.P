@@ -1,0 +1,40 @@
+# Layer 3 vocabulary: the rulebook's words, bound to the arm's site ids.
+#
+# This is the contract that makes "we'll write the rulebook to match the robot
+# commands" enforceable rather than a hope. plan_bridge.py validates every plan
+# against this file and refuses anything it does not recognise -- so a mismatch
+# surfaces at authoring time, not with a block in the gripper.
+#
+# Nothing here is a coordinate. Coordinates live in workstation.yaml under
+# `sites`, and the bridge checks that every target below exists there.
+
+verbs:
+  # An action is a pick-and-place if its name starts with one of these. The
+  # rulebook template forces one unique action name per step, so the name
+  # cannot be a bare verb -- the arguments come from `uses` instead.
+  pick_and_place:
+    action_prefixes: ["place_"]
+
+# Rulebook object word -> scene object id.
+objects:
+  red_block: red_block
+  green_block: green_block
+  blue_block: blue_block
+
+# Rulebook place word -> site id in workstation.yaml sites.places.
+#
+# Word names, not letters: the ingestion parser strips "a" as an article, so
+# "vertex a" tokenises to just "vertex" and would match every vertex sentence.
+places:
+  left_vertex:  vertex_a
+  right_vertex: vertex_b
+  top_vertex:   vertex_c
+  first_dot:    dot_x
+  second_dot:   dot_y
+  third_dot:    dot_z
+
+policy:
+  # abort   -- stop on the first failed step (right for a "sequence": two
+  #            thirds of a triangle is not a partial success)
+  # continue -- attempt the remaining steps anyway
+  on_step_failure: abort

@@ -77,8 +77,17 @@ cat <<'DONE'
   # headless
   ros2 launch grasp_arm_bringup warehouse_sim.launch.py headless:=true launch_rviz:=false
 
-  # in a second terminal
-  ros2 run grasp_arm_bringup pick_place.py            # all three objects
-  ros2 run grasp_arm_bringup pick_place.py --reset    # back to the start pose
-  ros2 topic echo /grasp_arm/events                   # acknowledgements
+  # in a second terminal, once, with the sim up:
+  ros2 run grasp_arm_bringup calibrate_reach.py       # -> config/capabilities.yaml
+
+  # drive from a G.R.A.S.P plan
+  ./tools/emit_plan.py "make a magic sequence" -o /tmp/plan.json
+  ros2 run grasp_arm_bringup plan_bridge.py /tmp/plan.json --reset
+
+  # or drive the arm directly
+  ros2 run grasp_arm_bringup pick_place.py red_block:vertex_a
+  ros2 run grasp_arm_bringup pick_place.py --reset
+
+  ros2 topic echo /grasp_arm/events        # arm acknowledgements
+  ros2 topic echo /grasp_arm/plan_events   # plan-level events
 DONE

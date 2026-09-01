@@ -1,0 +1,26 @@
+# One pick-and-place, addressed symbolically.
+#
+# The caller names an object and a destination; it never sends coordinates. The
+# arm owns the binding from those names to poses, and owns the verification
+# that decides whether the task actually succeeded.
+
+# --- goal ---
+string object_id        # e.g. "red_block"   -- must exist in the scene
+string place_id         # e.g. "vertex_a"    -- must exist in sites.places
+---
+# --- result ---
+bool success
+string message          # human-readable reason on failure
+string failure_code     # machine-readable: "", UNKNOWN_OBJECT, UNKNOWN_PLACE,
+                        # PLACE_OCCUPIED, NO_CLEARANCE, IK_FAILED,
+                        # PICK_NOT_VERIFIED, PLACE_NOT_VERIFIED, ABORTED
+float64 pick_rise       # m the object actually rose (measured)
+float64 place_xy_error  # m from the target point (measured)
+float64 place_z_error   # m from the expected resting height (measured)
+uint8 grasp_attempts
+---
+# --- feedback ---
+string phase            # opening, approaching, grasping, lifting, verifying,
+                        # transiting, releasing, retreating
+uint8 phase_index
+uint8 phase_total
