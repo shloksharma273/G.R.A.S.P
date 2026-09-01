@@ -12,6 +12,7 @@ graph, and a natural-language command becomes an ordered, executable plan.
 | 4 · Normalize direction & order | settle head → tail, derive `precedes` | built (`direction_normalizer/`) |
 | 5 · Write | persist to the PlanGraph | built (`plangraph_writer/`) |
 | **Layer 2** · Planning | command → goal → subgraph → ordered `plan.json` | built (`layer2_planning/`) |
+| **UI** · Web front end | ask in a browser, read the plan | built (`grasp_web/`) |
 
 ---
 
@@ -893,6 +894,78 @@ python demo_plan_offline.py                 # all six rulebooks, offline, no LLM
 ```
 
 
+---
+
+## The web front end
+
+**Ask in plain English in a browser; read the plan.**
+
+```bash
+python serve_grasp.py             # http://127.0.0.1:8080
+python serve_grasp.py --open      # and open a browser
+python serve_grasp.py --no-llm    # templated wording, same step order
+```
+
+Reads the same environment as the CLI. Read-only over the PlanGraph, and bound to
+localhost unless `--host` says otherwise — this is a developer tool sitting in a
+process whose environment holds write credentials, so it should not listen on a
+public interface by accident.
+
+### It is deliberately thin
+
+Every decision the page shows is already made by Layer 2 — the goal, the order,
+the confidence, the clarification. `grasp_web/api.py` connects once, keeps the
+retriever warm and serializes; it holds no planning logic, so the browser and the
+CLI cannot drift apart in what they answer.
+
+| Route | Returns |
+| --- | --- |
+| `GET /` | the page |
+| `GET /api/health` | database, graph, skill count, retrieval method, phrasing |
+| `GET /api/skills` | every skill with its step count |
+| `POST /api/plan` | `{command, use_llm}` → a plan, a clarification, or a stated error |
+
+**Standard library only.** Four JSON routes do not justify a web framework, and
+`requirements.txt` still lists one required package.
+
+### What the page shows
+
+The header carries the connection as pills — database, graph, skill count, and
+whether retrieval is `vector` or `lexical`, the last flagged amber when no vector
+index exists yet. Each answer is a card: the goal, the match score, how many
+ordering constraints produced the sequence, and whether the wording is
+model-written or templated.
+
+Every step shows its `requires` / `produces` / `uses` edges as coloured chips, so
+the dependency structure is readable without opening the JSON — amber for a
+precondition, green for an effect. A below-threshold command renders as a
+clarification with its candidates as buttons, which is the same refusal to guess
+the CLI makes, only clickable.
+
+The **model phrasing** toggle is the honest demonstration: turn it off and the
+wording gets plainer while the order does not move at all.
+
+### The palette
+
+Taken from arango.ai's own brand tokens — `#044926` deep green, `#b9ff38` lime,
+`#befe99` light green, `#151d25` dark slate. The lime is rationed on purpose: it
+marks the one thing that matters on a surface (the goal, the send button, a step
+number). Spread everywhere it would stop meaning anything.
+
+No CDN, no external font, no third-party script — the page loads only its own two
+assets, and a test asserts that. Skill names and model-written wording are
+escaped before they reach the DOM; neither is trusted markup.
+
+### Verify
+
+```bash
+python -m unittest discover -s tests -t .   # includes 30 tests for the UI
+```
+
+The route tests run a real server on a real socket rather than mocking the
+handler, and cover path traversal, oversized bodies and malformed JSON.
+
+
 ## The bundle contract
 
 One bundle per relationship (PRD Section 7). This is the canonical unit passed to
@@ -984,6 +1057,11 @@ kg_read_harness/          Station 1 — Read
   output.py     table + JSON listing, type-pair summary      (FR-6, FR-7)
   errors.py     typed failures, hints, exit codes            (FR-8)
   cli.py        one-shot entry point
+grasp_web/                Web front end
+  api.py        a thin shell over Layer 2; no planning logic
+  server.py     stdlib HTTP: four JSON routes plus the static page
+  cli.py        entry point
+  static/       index.html · app.css · app.js
 layer2_planning/          Layer 2 — Planning
   config.py     threshold, top-k, model                       (Section 9)
   retrieve.py   Stage 1: goal resolution + the guardrail      (FR-2)
@@ -1040,6 +1118,7 @@ disambiguate_kg.py         Station 3 launcher
 normalize_kg.py            Station 4 launcher
 write_plangraph.py         Station 5 launcher (dry run unless --write)
 plan_command.py            Layer 2 launcher: a command in, plan.json out
+serve_grasp.py             the web UI
 eval_chai_live.py          Station 3 accuracy eval vs. the answer key
 demo_chai_offline.py       Station 1 offline self-check
 demo_classify_offline.py   Station 2 offline self-check
