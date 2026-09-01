@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>G.R.A.S.P — ask for a plan</title>
+  <meta name="description" content="Ask in plain English; the graph answers with an ordered plan." />
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23044926'/><circle cx='16' cy='9' r='3.2' fill='%23b9ff38'/><circle cx='9' cy='22' r='3.2' fill='%23b9ff38'/><circle cx='23' cy='22' r='3.2' fill='%23b9ff38'/><path d='M16 12v4l-7 4M16 16l7 4' stroke='%23befe99' stroke-width='1.6' fill='none'/></svg>" />
+</head>
+<body>
+
+  <header>
+    <div class="wordmark">G.R.A.S.P <span>· planning</span></div>
+
+    <label class="toggle" title="Turn the model's phrasing off. The step order is derived from the graph and is identical either way.">
+      <input type="checkbox" id="llm" checked />
+      model phrasing
+    </label>
+
+    <div class="pills" id="pills">
+      <span class="pill">connecting<span class="dots"></span></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap">
+
+      <section class="welcome" id="welcome">
+        <h1>Ask for a plan in <em>plain English</em>.</h1>
+        <p>
+          The command only locates a goal in the graph. The order of the steps comes
+          from the precondition graph itself — which action produces the state the
+          next one needs — so it is the same whether or not a model writes the wording.
+        </p>
+        <div class="suggestions" id="suggestions">
+          <span class="chip">loading skills<span class="dots"></span></span>
+        </div>
+      </section>
+
+      <section id="stream"></section>
+    </div>
+  </main>
+
+  <footer>
+    <form class="composer" id="composer" autocomplete="off">
+      <input id="command" name="command" placeholder="make me a chai" aria-label="Your command" />
+      <button type="submit" id="send">Plan</button>
+    </form>
+    <div class="hint">
+      Step order is graph-derived. <b>requires</b> a state · <b>produces</b> a state ·
+      <b>uses</b> an object. Below the match threshold it asks instead of guessing.
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
