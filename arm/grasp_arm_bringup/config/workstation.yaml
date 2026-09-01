@@ -108,6 +108,24 @@ motion:
   # rad/s ceiling per joint. Move durations are stretched to respect it, which
   # is what keeps a grasped object in the gripper during transit.
   max_joint_speed: 0.45
+  # IK attempts per waypoint. calibrate_reach.py and task_executor.py MUST
+  # use the same number: the capability table is only meaningful if the
+  # executor is as persistent as the check that certified the pair.
+  ik_tries: 12
+  # A descent/lift/release must be a SMALL joint motion. Reject an IK
+  # solution further than this from the pose above it, rather than
+  # sweeping the arm sideways through the block.
+  fine_max_delta: 0.9
+  # Grace beyond the trajectory duration before we stop waiting for the
+  # controller, and how close the arm must be for the move to count
+  # anyway if no result ever arrives.
+  move_result_grace: 60.0
+  move_reached_tol: 0.05
+  # Position limits from the URDF. joint_1/4/6 are continuous (no limits).
+  joint_position_limits:
+    joint_2: [-2.24, 2.24]
+    joint_3: [-2.57, 2.57]
+    joint_5: [-2.09, 2.09]
   fine_secs: 2.5           # descend / lift
   settle_secs: 1.2         # let physics settle before verifying
 

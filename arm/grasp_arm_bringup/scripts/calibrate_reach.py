@@ -26,7 +26,18 @@ import time
 from pathlib import Path
 
 import rclpy
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError as exc:   # pragma: no cover
+    raise SystemExit(
+        "PyYAML is missing from the interpreter running this node.\n"
+        "This usually means a project virtualenv is active: ROS injects rclpy "
+        "through PYTHONPATH, which bypasses venv isolation, but PyYAML does "
+        "not come that way.\n"
+        "Fix it with either:\n"
+        "    pip install pyyaml          # into the active venv\n"
+        "    deactivate                  # and run ROS commands outside it"
+    ) from exc
 from ament_index_python.packages import get_package_share_directory
 from moveit_msgs.srv import GetPositionIK
 from rclpy.node import Node
@@ -34,9 +45,15 @@ from sensor_msgs.msg import JointState
 
 ARM_JOINTS = [f"joint_{i}" for i in range(1, 7)]
 TWO_PI = 2.0 * math.pi
+# Only these three are continuous. Wrapping a LIMITED joint by 2*pi yields a
+# value outside its range, which the trajectory controller rejects outright --
+# that is a MOVE_REJECTED, not an IK failure.
+CONTINUOUS = {"joint_1", "joint_4", "joint_6"}
 
 
-def _nearest_branch(value: float, reference: float) -> float:
+def _nearest_branch(joint: str, value: float, reference: float) -> float:
+    if joint not in CONTINUOUS:
+        return value
     while value - reference > math.pi:
         value -= TWO_PI
     while reference - value > math.pi:
@@ -105,7 +122,7 @@ class Calibrator(Node):
             sol = dict(zip(res.solution.joint_state.name, res.solution.joint_state.position))
             # See task_executor._nearest_branch: continuous joints can come
             # back a full turn away.
-            q = [_nearest_branch(sol[j], ref) for j, ref in zip(ARM_JOINTS, seed)]
+            q = [_nearest_branch(j, sol[j], ref) for j, ref in zip(ARM_JOINTS, seed)]
             cost = max(abs(a - b) for a, b in zip(q, seed))
             if cost < best_cost:
                 best, best_cost = q, cost
@@ -113,7 +130,7 @@ class Calibrator(Node):
                 break
         return best
 
-    def check_pair(self, object_id, place_id, tries=4):
+    def check_pair(self, object_id, place_id, tries=None):
         """Every waypoint of the step. Returns (ok, first failing waypoint)."""
         obj = self.objects[object_id]
         half_h = float(obj["size"][2]) / 2.0
@@ -136,6 +153,7 @@ class Calibrator(Node):
             ("above_place", px, py, pz + min(self.m["approach_heights"])),
             ("at_place", px, py, pz),
         ]
+        tries = int(self.m.get("ik_tries", 12)) if tries is None else tries
         seed = list(self.m["home"])
         for name, x, y, z in waypoints:
             q = self.solvable(x, y, z, seed, tries=tries)
@@ -164,11 +182,6 @@ def main():
         row = f"  {obj:12s} "
         for place in places:
             ok, where = cal.check_pair(obj, place)
-            if not ok:
-                # KDL is iterative on a short timeout and produces spurious
-                # misses -- a pair can fail at a waypoint its siblings pass.
-                # Re-check once, harder, before recording a "no".
-                ok, where = cal.check_pair(obj, place, tries=10)
             table[obj][place] = ok
             if not ok:
                 failures[f"{obj}->{place}"] = where

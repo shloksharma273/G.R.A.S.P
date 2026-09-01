@@ -29,7 +29,18 @@ import sys
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError as exc:   # pragma: no cover
+    raise SystemExit(
+        "PyYAML is missing from the interpreter running this node.\n"
+        "This usually means a project virtualenv is active: ROS injects rclpy "
+        "through PYTHONPATH, which bypasses venv isolation, but PyYAML does "
+        "not come that way.\n"
+        "Fix it with either:\n"
+        "    pip install pyyaml          # into the active venv\n"
+        "    deactivate                  # and run ROS commands outside it"
+    ) from exc
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent

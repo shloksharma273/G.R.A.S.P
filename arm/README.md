@@ -243,6 +243,33 @@ pose is usually the binding one, which is why `calibrate_reach.py` checks all
 five waypoints and why the executor falls back through
 `motion.approach_heights`.
 
+**The capability table is only as good as the executor's persistence.**
+`calibrate_reach.py` and `task_executor.py` both read `motion.ik_tries`, and they
+must: an earlier version certified pairs with 10 IK attempts while the executor
+tried 4, so the table promised reachability the arm could not deliver and steps
+failed `IK_FAILED` on pairs marked OK.
+
+**Only wrap the continuous joints.** `joint_1/4/6` are continuous; `joint_2/3/5`
+are limited to ±2.24 / ±2.57 / ±2.09. Normalising a *limited* joint onto the
+nearest 2π branch produces a target outside its range, which the controller
+refuses — surfacing as a baffling `MOVE_REJECTED` rather than an IK failure.
+`solve_ik` now also discards any solution outside `motion.joint_position_limits`
+rather than letting the controller reject it later.
+
+**A descent must be a small motion.** Random restarts can return a valid
+solution on a far-away configuration; used for the descent onto a block, the arm
+sweeps sideways through it and knocks it away. Fine waypoints (descend, lift,
+release) reject solutions further than `motion.fine_max_delta` from the pose
+above them.
+
+**The controller does not always report completion.** With kortex's
+`goal_time: 0.0` and `stopped_velocity_tolerance: 0.0`, the trajectory action can
+sit indefinitely without declaring success on a move the arm has physically
+finished. `move_joints` therefore falls back to comparing actual joint positions
+against the target (`motion.move_reached_tol`) instead of trusting the absence
+of a result. This is the same lesson as the acknowledgements: a controller
+reporting — or failing to report — is not evidence about the world.
+
 **Kill leftover action servers between runs.** `task_executor` is an action
 server. A leftover one from a previous simulator stays bound to
 `/task_executor/execute_task` and answers clients using poses frozen at that
@@ -259,6 +286,28 @@ seconds — exactly when planning starts. See `world.force_static_includes`.
 Ignition-native equivalents, the other two with inline primitives at the same
 poses. `shelves_high2` uses a Gazebo Classic `<material><script>` block that
 Ignition ignores, so those shelves render untextured. Cosmetic only.
+
+## Running inside the G.R.A.S.P virtualenv
+
+The repo's `.venv` was created with `include-system-site-packages = false`. That
+combination breaks ROS nodes in a confusing way: ROS injects `rclpy` through
+`PYTHONPATH`, which bypasses venv isolation, so `import rclpy` succeeds — but
+`numpy`, `PyYAML` and friends are ordinary system packages and are *not* on
+`PYTHONPATH`, so they vanish. You get `ModuleNotFoundError: No module named
+'yaml'` from a node that clearly found ROS fine.
+
+Flip one line in `.venv/pyvenv.cfg`:
+
+```
+include-system-site-packages = true
+```
+
+That fixes the whole class at once, and the venv still isolates anything you
+install into it. The alternative is `deactivate` before running ROS commands —
+nothing in this package needs the venv.
+
+`python3-yaml` is declared in `package.xml`, so `rosdep install` covers a fresh
+machine; the venv case is the one rosdep cannot see.
 
 ## Environment
 

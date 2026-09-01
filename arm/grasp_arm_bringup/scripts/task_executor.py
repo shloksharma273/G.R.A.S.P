@@ -27,7 +27,18 @@ import time
 from pathlib import Path
 
 import rclpy
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError as exc:   # pragma: no cover
+    raise SystemExit(
+        "PyYAML is missing from the interpreter running this node.\n"
+        "This usually means a project virtualenv is active: ROS injects rclpy "
+        "through PYTHONPATH, which bypasses venv isolation, but PyYAML does "
+        "not come that way.\n"
+        "Fix it with either:\n"
+        "    pip install pyyaml          # into the active venv\n"
+        "    deactivate                  # and run ROS commands outside it"
+    ) from exc
 from ament_index_python.packages import get_package_share_directory
 from control_msgs.action import FollowJointTrajectory, GripperCommand
 from geometry_msgs.msg import Pose
@@ -47,10 +58,16 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 ARM_JOINTS = [f"joint_{i}" for i in range(1, 7)]
 TWO_PI = 2.0 * math.pi
+# Only these three are continuous. Wrapping a LIMITED joint by 2*pi yields a
+# value outside its range, which the trajectory controller rejects outright --
+# that is a MOVE_REJECTED, not an IK failure.
+CONTINUOUS = {"joint_1", "joint_4", "joint_6"}
 
 
-def _nearest_branch(value: float, reference: float) -> float:
-    """Same joint angle, expressed closest to `reference`."""
+def _nearest_branch(joint: str, value: float, reference: float) -> float:
+    """Same angle, expressed closest to `reference` -- continuous joints only."""
+    if joint not in CONTINUOUS:
+        return value
     while value - reference > math.pi:
         value -= TWO_PI
     while reference - value > math.pi:
@@ -173,7 +190,8 @@ class TaskExecutor(Node):
         q = (self.g["gap_at_zero_mm"] - width_m * 1000.0) / self.g["mm_per_rad"] + sq
         return max(self.g["open_position"], min(0.75, q))
 
-    def solve_ik(self, x, y, z, seed=None, tries=4):
+    def solve_ik(self, x, y, z, seed=None, tries=None, max_delta=None):
+        tries = int(self.m.get("ik_tries", 12)) if tries is None else tries
         reference = list(seed) if seed else [
             self.js.position[self.js.name.index(j)] for j in ARM_JOINTS
         ]
@@ -210,13 +228,46 @@ class TaskExecutor(Node):
             # turn away -- kinematically identical, but the controller would
             # then swing the joint all the way round. Pull each onto the branch
             # nearest where the arm already is.
-            q = [_nearest_branch(sol[j], ref) for j, ref in zip(ARM_JOINTS, reference)]
+            q = [_nearest_branch(j, sol[j], ref) for j, ref in zip(ARM_JOINTS, reference)]
+            bad = self.out_of_limits(q)
+            if bad:
+                # Sending this would be rejected by the controller as an
+                # unreachable goal, which surfaces as a confusing
+                # MOVE_REJECTED. Discard it here instead.
+                continue
             cost = max(abs(a - b) for a, b in zip(q, reference))
             if cost < best_cost:
                 best, best_cost = q, cost
             if best_cost < 0.35:
                 break
+        # Random restarts find solutions the exact seed misses, but they can
+        # also land on a far-away configuration. For a fine waypoint -- the
+        # descent onto a block, the lift, the release -- a far solution means
+        # the arm sweeps sideways through what it is trying to grasp, so refuse
+        # it and report an honest failure instead.
+        if max_delta is not None and best is not None and best_cost > max_delta:
+            return None
         return best
+
+    def joint_error(self, q):
+        """Largest per-joint distance between the arm and a target, or None."""
+        if self.js is None:
+            return None
+        try:
+            actual = [self.js.position[self.js.name.index(j)] for j in ARM_JOINTS]
+        except ValueError:
+            return None
+        return max(abs(a - b) for a, b in zip(actual, q))
+
+    def out_of_limits(self, q):
+        """Joints whose target is outside the URDF position limits, if any."""
+        limits = self.m.get("joint_position_limits", {})
+        bad = []
+        for joint, value in zip(ARM_JOINTS, q):
+            span = limits.get(joint)
+            if span and not (float(span[0]) <= value <= float(span[1])):
+                bad.append(f"{joint}={value:.3f} outside [{span[0]}, {span[1]}]")
+        return bad
 
     def move_joints(self, q, secs):
         current = [self.js.position[self.js.name.index(j)] for j in ARM_JOINTS]
@@ -229,11 +280,41 @@ class TaskExecutor(Node):
         pt.time_from_start.sec = int(secs)
         pt.time_from_start.nanosec = int((secs % 1) * 1e9)
         goal.trajectory.points = [pt]
-        gh = self._wait(self.arm.send_goal_async(goal), 20.0)
-        if gh is None or not gh.accepted:
+        bad = self.out_of_limits(q)
+        if bad:
+            self.get_logger().error(f"refusing move, out of limits: {'; '.join(bad)}")
             return False
-        res = self._wait(gh.get_result_async(), secs + 30)
-        return res is not None and res.result.error_code == 0
+        gh = self._wait(self.arm.send_goal_async(goal), 20.0)
+        if gh is None:
+            self.get_logger().error("arm action: no response to the goal")
+            return False
+        if not gh.accepted:
+            self.get_logger().error(f"arm action rejected the goal "
+                                    f"(target={[round(v, 3) for v in q]}, {secs:.1f}s)")
+            return False
+        budget = secs + float(self.m.get("move_result_grace", 60.0))
+        res = self._wait(gh.get_result_async(), budget)
+        if res is None:
+            # The controller does not always report completion: with
+            # goal_time=0 and stopped_velocity_tolerance=0 in the kortex
+            # controller config it can sit waiting on tolerances it never
+            # declares met. Judge the move by where the arm actually is.
+            reached = self.joint_error(q)
+            if reached is not None and reached <= float(self.m.get("move_reached_tol", 0.05)):
+                self.get_logger().warn(
+                    f"arm action gave no result in {budget:.0f}s, but the arm is "
+                    f"within {reached:.3f} rad of the target -- continuing")
+                return True
+            self.get_logger().error(
+                f"arm action timed out after {budget:.0f}s"
+                + (f", still {reached:.3f} rad from the target" if reached is not None else ""))
+            return False
+        if res.result.error_code != 0:
+            self.get_logger().error(
+                f"arm action failed: error_code={res.result.error_code} "
+                f"{res.result.error_string}")
+            return False
+        return True
 
     def set_gripper(self, q):
         goal = GripperCommand.Goal()
@@ -342,7 +423,7 @@ class TaskExecutor(Node):
         if not self.move_joints(q_above, self.m["move_secs"]):
             raise TaskFailure("MOVE_REJECTED", f"approach move to {object_id} failed")
 
-        q_grasp = self.solve_ik(cx, cy, grasp_z, seed=q_above)
+        q_grasp = self.solve_ik(cx, cy, grasp_z, seed=q_above, max_delta=self.m["fine_max_delta"])
         if q_grasp is None:
             raise TaskFailure("IK_FAILED", f"no grasp pose at {object_id}")
 
@@ -359,7 +440,8 @@ class TaskExecutor(Node):
             result.grasp_attempts = attempt + 1
 
             self._feedback(handle, "lifting")
-            q_lift = self.solve_ik(cx, cy, grasp_z + self.m["lift_height"], seed=q_grasp)
+            q_lift = self.solve_ik(cx, cy, grasp_z + self.m["lift_height"],
+                                   seed=q_grasp, max_delta=self.m["fine_max_delta"])
             self.move_joints(q_lift or q_above, self.m["fine_secs"])
 
             self._feedback(handle, "verifying")
@@ -392,7 +474,7 @@ class TaskExecutor(Node):
             raise TaskFailure("MOVE_REJECTED", f"transit move to {place_id} failed")
 
         self._feedback(handle, "releasing")
-        q_place = self.solve_ik(px, py, pz, seed=q_above_place)
+        q_place = self.solve_ik(px, py, pz, seed=q_above_place, max_delta=self.m["fine_max_delta"])
         self.move_joints(q_place or q_above_place, self.m["fine_secs"])
         self.set_gripper(self.g["open_position"])
         self.settle()
