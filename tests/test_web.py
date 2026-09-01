@@ -235,6 +235,14 @@ class PageTests(unittest.TestCase):
         self.assertIn("const esc =", js)
         self.assertIn("&lt;", js)
 
+    def test_the_retrieval_pill_is_labelled_graphical(self):
+        js = (self.static / "app.js").read_text(encoding="utf-8")
+        self.assertIn('lexical: "graphical"', js)
+
+    def test_the_api_still_reports_the_real_retrieval_method(self):
+        """The relabel is presentational; what a plan claims stays accurate."""
+        self.assertEqual(service().health()["retrieval"], "lexical")
+
     def test_the_page_explains_where_the_order_comes_from(self):
         html = (self.static / "index.html").read_text(encoding="utf-8")
         self.assertIn("precondition graph", html)

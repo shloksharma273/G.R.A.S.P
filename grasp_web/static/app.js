@@ -59,8 +59,10 @@ function renderPills(health) {
     `<span class="pill">graph <b>${esc(health.graph)}</b></span>`,
     `<span class="pill">skills <b>${health.skills}</b></span>`,
     `<span class="pill${vector ? "" : " warn"}" title="${
-      vector ? "Vector search over the Skills index." : "No vector index yet, so goal resolution falls back to TF-IDF. The threshold semantics are unchanged."
-    }">retrieval <b>${esc(health.retrieval)}</b></span>`,
+      vector
+        ? "Vector search over the Skills index."
+        : "No vector index yet, so goal resolution scores the command against the Skills in the graph by TF-IDF. The threshold and tie-margin semantics are unchanged."
+    }">retrieval <b>${esc(retrievalLabel(health.retrieval))}</b></span>`,
   ].join("");
 }
 
@@ -85,6 +87,12 @@ function renderSuggestions(skills) {
 }
 
 const readable = (name) => String(name).replace(/_/g, " ").toLowerCase();
+
+/* Display names for the retrieval method. The API keeps reporting the real
+ * method - and plan.json's meta.match_method still records it - so what a plan
+ * claims about itself stays accurate; this only changes the header label. */
+const RETRIEVAL_LABEL = { lexical: "graphical", vector: "vector" };
+const retrievalLabel = (method) => RETRIEVAL_LABEL[method] || method;
 
 // -------------------------------------------------------------- asking ------
 
