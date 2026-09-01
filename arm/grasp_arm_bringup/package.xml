@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>grasp_arm_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    Kinova Gen3 (6 DoF, Robotiq 2F-85) in the warehouse world, with the
+    pick-and-place scripting layer for G.R.A.S.P. Replaces
+    kortex_bringup/kortex_sim_control.launch.py, which hardcodes an empty
+    world and never spawns the gripper controller.
+  </description>
+  <maintainer email="shlok.sharma@arangodb.com">Shlok Sharma</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>joint_trajectory_controller</exec_depend>
+  <exec_depend>position_controllers</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>kortex_description</exec_depend>
+  <exec_depend>robotiq_description</exec_depend>
+  <exec_depend>kinova_gen3_6dof_robotiq_2f_85_moveit_config</exec_depend>
+  <exec_depend>ign_ros2_control</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ros_gz_interfaces</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

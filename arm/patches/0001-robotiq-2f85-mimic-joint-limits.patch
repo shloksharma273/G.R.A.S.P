@@ -1,0 +1,36 @@
+diff --git a/robotiq_description/urdf/robotiq_2f_85_macro.urdf.xacro b/robotiq_description/urdf/robotiq_2f_85_macro.urdf.xacro
+index bc10e24..44f0f89 100644
+--- a/robotiq_description/urdf/robotiq_2f_85_macro.urdf.xacro
++++ b/robotiq_description/urdf/robotiq_2f_85_macro.urdf.xacro
+@@ -269,6 +269,7 @@
+             <child link="${prefix}robotiq_85_left_inner_knuckle_link" />
+             <axis xyz="0 -1 0" />
+             <origin xyz="0.0127 0.0 0.06142" rpy="0 0 0" />
++            <limit effort="50" velocity="0.5" />
+             <mimic joint="${prefix}robotiq_85_left_knuckle_joint" />
+         </joint>
+ 
+@@ -277,6 +278,7 @@
+             <child link="${prefix}robotiq_85_right_inner_knuckle_link" />
+             <axis xyz="0 -1 0" />
+             <origin xyz="-0.0127 0.0 0.06142" rpy="0 0 0" />
++            <limit effort="50" velocity="0.5" />
+             <mimic joint="${prefix}robotiq_85_left_knuckle_joint" multiplier="-1" />
+         </joint>
+ 
+@@ -285,6 +287,7 @@
+             <child link="${prefix}robotiq_85_left_finger_tip_link" />
+             <axis xyz="0 -1 0" />
+             <origin xyz="0.00563134 0.0 0.04718515" rpy="0 0 0" />
++            <limit effort="50" velocity="0.5" />
+             <mimic joint="${prefix}robotiq_85_left_knuckle_joint" multiplier="-1" />
+         </joint>
+ 
+@@ -293,6 +296,7 @@
+             <child link="${prefix}robotiq_85_right_finger_tip_link" />
+             <axis xyz="0 -1 0" />
+             <origin xyz="-0.00563134 0.0 0.04718515" rpy="0 0 0" />
++            <limit effort="50" velocity="0.5" />
+             <mimic joint="${prefix}robotiq_85_left_knuckle_joint" />
+         </joint>
+     </xacro:macro>

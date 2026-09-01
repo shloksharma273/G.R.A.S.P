@@ -1,0 +1,20 @@
+# Third-party sources for the G.R.A.S.P robotic-arm demo.
+#   vcs import vendor < arm_demo.repos
+#
+# Only kortex_description / kortex_moveit_config / robotiq_description are
+# actually built from source (see vendor COLCON_IGNORE markers written by
+# setup.sh) -- kortex_api and kortex_driver are hardware-only and come from
+# the ros-humble-kortex-* debs.
+repositories:
+  ros2_kortex:
+    type: git
+    url: https://github.com/Kinovarobotics/ros2_kortex.git
+    version: humble
+  ros2_robotiq_gripper:
+    type: git
+    url: https://github.com/aalmrad/ros2_robotiq_gripper.git
+    version: main
+  gazebo_models_worlds_collection:
+    type: git
+    url: https://github.com/leonhartyao/gazebo_models_worlds_collection.git
+    version: master

@@ -1,0 +1,119 @@
+# Single source of truth for the demo workstation.
+#
+# make_world.py builds the Gazebo world from this, and warehouse_sim.launch.py
+# reads robot.spawn_pose from it, so the SDF and the launch can never drift.
+#
+# Frame: the warehouse world frame. The aisle between the y=3.4 shelf row and
+# the y=-1.5 shelf row is open floor, so the workstation sits at y ~ 1.2.
+
+world:
+  # Warehouse furniture is forced static: 67 free-floating pallet models make
+  # the solver crawl and let stacked pallets settle/jitter for the first few
+  # seconds, which is exactly when we want to start planning.
+  force_static_includes: true
+  # model:// deps the worlds collection does not ship; substituted inline.
+  substitute_models:
+    grey_wall:            {type: box, size: [7.5, 0.2, 2.8], color: [0.7, 0.7, 0.7]}
+    first_2015_trash_can: {type: cylinder, radius: 0.18, length: 0.8, color: [0.2, 0.25, 0.3]}
+
+table:
+  name: work_table
+  centre: [0.0, 1.2]
+  top_size: [1.6, 1.0, 0.05]   # x, y, slab thickness
+  top_height: 0.75             # z of the top surface
+  leg: 0.07
+  color: [0.55, 0.42, 0.30]
+
+gripper:
+  # DO NOT set open_position to 0.0.
+  #
+  # robotiq_85_left_knuckle_joint has limit lower="0.0". Commanding it to
+  # exactly its lower limit permanently locks the joint in Ignition Fortress:
+  # the first close works, the open to 0.0 works, and every subsequent command
+  # is silently ignored by the physics engine -- the controller reports
+  # stalled/success while the joint sits at 0.0000 forever. It is not the
+  # controller: a plain joint_trajectory_controller on the same joint reports
+  # "Goal reached, success!" while nothing moves. Holding 0.05 of margin off
+  # the stop cycles cleanly indefinitely (verified 7/7).
+  open_position: 0.05
+  max_effort: 100.0
+  joint: robotiq_85_left_knuckle_joint
+  action: /robotiq_gripper_controller/gripper_cmd
+
+  # Closing position is computed from the object width, NOT fixed. Measured on
+  # this model by sweeping q and reading fingertip separation out of Ignition:
+  #
+  #     q      0.05   0.20   0.35   0.50   0.65   0.79
+  #     sep_mm 131.1  116.8  101.2   84.8   67.8   51.8
+  #
+  # which is linear, and gives 84.7 mm of travel at q=0 -- matching the 2F-85's
+  # 85 mm spec. Closing blindly to 0.70 leaves a 9 mm gap: it shuts straight
+  # past a 50 mm cube and knocks it aside instead of gripping it.
+  gap_at_zero_mm: 84.7
+  mm_per_rad: 107.2
+  squeeze: 0.04          # rad of over-closure past contact, for grip force
+  # end_effector_link -> fingertip plane, from the URDF chain and confirmed
+  # against Ignition link poses.
+  tcp_offset_z: 0.098
+
+robot:
+  # Mounted on the table top, facing +x. base_link is anchored rigidly because
+  # the kortex URDF roots at a link named "world".
+  spawn_pose: {x: -0.50, y: 1.2, z: 0.75, roll: 0.0, pitch: 0.0, yaw: 0.0}
+
+# Graspable objects. Sized for the 2F-85 (85 mm max opening) with margin, and
+# given high friction -- the gripper has no tactile feedback to compensate.
+#
+# All three are boxes on purpose. A cylinder was tried here and does not work
+# reliably on this stack: the fingers are position-controlled with no tactile
+# feedback, so a smooth cylinder is held on line contact only. Measured, at
+# 60 mm dia it never lifts; at 46 mm it lifts ~49 mm then slips out during
+# transit and rolls away. Boxes ran 8/8. Reliable cylinder handling needs
+# force/effort control on the gripper joint, which is future work.
+#
+# Widths stay in q ~ 0.30-0.36, where the 2F-85 pads are closest to parallel
+# and grip best; see gripper.gap_at_zero_mm for the width -> q mapping.
+objects:
+  - {name: red_cube,    type: box,      size: [0.05, 0.05, 0.05], mass: 0.10, color: [0.80, 0.15, 0.15], pose: [-0.11, 0.975, 0.775]}
+  - {name: green_cube,  type: box,      size: [0.05, 0.05, 0.05], mass: 0.10, color: [0.15, 0.65, 0.20], pose: [-0.05, 1.200, 0.775]}
+  - {name: blue_block,  type: box,      size: [0.055, 0.055, 0.055], mass: 0.12, color: [0.15, 0.30, 0.85], pose: [-0.11, 1.425, 0.7775], squeeze: 0.06}
+
+# Where things get placed. A flat pad, not a walled bin: nothing for the
+# gripper to clip on the way out, and the drop is verified from the object's
+# real pose rather than from bin geometry.
+place_pad:
+  name: place_pad
+  centre: [0.22, 1.2]
+  size: [0.34, 0.34, 0.02]
+  color: [0.85, 0.75, 0.20]
+  # Drop slots on the pad, in world coords.
+  # Radius from base_link is kept under ~0.72 m; the Gen3's 0.902 m reach gets
+  # awkward past that with the wrist pointing straight down.
+  slots:
+    red_cube:   [0.10, 1.10]
+    green_cube: [0.10, 1.30]
+    blue_block: [0.17, 1.20]
+  drop_clearance: 0.06   # m above the pad surface to release
+
+motion:
+  # SRDF "Home" for the manipulator group.
+  home: [0.0, 0.26, -2.27, 0.0, 0.96, 1.57]
+  approach_height: 0.12    # m above the grasp pose to line up from
+  lift_height: 0.12        # m to raise after closing
+  release_gap: 0.012       # m between object bottom and the pad when released
+  move_secs: 5.0           # floor for a long move; see max_joint_speed
+  # rad/s ceiling per joint. Move durations are stretched to respect it, which
+  # is what keeps a grasped object in the gripper during transit.
+  max_joint_speed: 0.45
+  fine_secs: 2.5           # descend / lift
+  settle_secs: 1.2         # let physics settle before verifying
+
+  # One retry with slightly more squeeze, for transient slips.
+  pick_retries: 1
+  retry_squeeze_step: 0.02
+
+verify:
+  # Acknowledgements are checked against Ignition ground truth, not assumed.
+  pick_min_rise: 0.04      # m the object must actually rise to count as picked
+  place_xy_tol: 0.06       # m from the target slot centre
+  place_z_tol: 0.03        # m from the expected resting height

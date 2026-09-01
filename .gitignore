@@ -5,3 +5,9 @@ __pycache__/
 .DS_Store
 prd/
 .grasp_cache/
+
+# --- robotic arm demo (branch: robotic-arm) ---
+# Third-party sources are fetched with vcs/setup.sh, not vendored into git.
+arm/vendor/
+# World SDF generated from the (GPL-3.0) worlds collection at setup time.
+arm/grasp_arm_bringup/worlds/generated/
