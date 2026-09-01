@@ -42,7 +42,9 @@ arm/
   arm_demo.repos            third-party sources (vcs import)
   patches/                  the one vendor patch we carry
   vendor/                   third-party clones (gitignored, ~1.7 GB)
-  tools/emit_plan.py        rulebook -> G.R.A.S.P -> plan.json (offline, no LLM)
+  tools/run_command.sh      one shot: "make a magic sequence" -> the arm moves
+  tools/emit_plan.py        rulebook -> G.R.A.S.P -> plan.json (offline or live)
+  tools/graspenv.py         loads .env; pins the PlanGraph to its own prefix
   grasp_arm_msgs/           the ExecuteTask action
   grasp_arm_bringup/
     config/workstation.yaml physical truth: sites, gripper calibration, limits
@@ -76,11 +78,16 @@ ros2 launch grasp_arm_bringup warehouse_sim.launch.py       # sim + MoveIt + RVi
 # once, with the sim up: which (block, place) pairs are actually achievable
 ros2 run grasp_arm_bringup calibrate_reach.py
 
-# the G.R.A.S.P-driven path
+# the G.R.A.S.P-driven path, in one command
 cd src/G.R.A.S.P/arm
-./tools/emit_plan.py "make a magic sequence" -o /tmp/plan.json
+./tools/run_command.sh "make a magic sequence"
+./tools/run_command.sh "arrange the blocks in a straight line"
+./tools/run_command.sh "make a magic sequence" --dry-run   # validate, don't move
+./tools/run_command.sh "make a magic sequence" --offline   # in-memory graph
+
+# or the two steps separately
+./tools/emit_plan.py "make a magic sequence" --live -o /tmp/plan.json
 ros2 run grasp_arm_bringup plan_bridge.py /tmp/plan.json --reset
-ros2 run grasp_arm_bringup plan_bridge.py /tmp/plan.json --dry-run   # validate only
 
 # or drive the arm directly
 ros2 run grasp_arm_bringup pick_place.py red_block:dot_x
@@ -99,6 +106,46 @@ Arm events on `/grasp_arm/events`: `task_started`, `picked`, `pick_retry`,
 `placed`, `task_failed`, `scene_reset`. Plan events on `/grasp_arm/plan_events`:
 `plan_started`, `step_started`, `step_complete`, `step_failed`, `step_skipped`,
 `plan_complete`, `plan_aborted`.
+
+## Where the PlanGraph lives
+
+By default `emit_plan.py` builds the graph in memory. With `--live` it uses the
+real ArangoDB named in the repo's `.env`.
+
+The live graph is written under its **own collection prefix**, `blocksDemo_*`,
+not the pilot's `plannerTest_*`. `test_shlok` is shared with other projects, so
+the demo creates its own `blocksDemo_PlanGraph` and leaves everything else
+alone. `PLANGRAPH_PREFIX` is the knob; both Station 5 and Layer 2 honour it.
+
+```bash
+./tools/emit_plan.py --live --write --dry-run   # report, write nothing
+./tools/emit_plan.py --live --write --list      # write, then list what is stored
+./tools/emit_plan.py --live --list              # just read what is stored
+```
+
+Written and verified: 2 skills, 6 primitives, 6 states, 12 objects, 32 edges.
+
+Two things are worth knowing about the live path. There is **no vector index**
+(`AUTOGRAPH_URL` is unset, so no embeddings are built), which means Layer 2
+falls back to its lexical TF-IDF retriever — the same one the offline path used,
+with the same 0.35 threshold and the same clarification guardrail. And the `.env`
+password is **quoted**: `set -a; source .env` strips the quotes, a hand-rolled
+parser does not, and the result is a bare HTTP 401 that looks exactly like an
+expired credential. `tools/graspenv.py` unquotes.
+
+Measured match confidences against the live graph:
+
+| command | resolves to | score |
+|---|---|---|
+| `make a magic sequence` | `make_magic_sequence` | 0.85 |
+| `do the magic sequence` | `make_magic_sequence` | 0.70 |
+| `arrange the blocks in a straight line` | `make_straight_line` | 0.65 |
+| `line the blocks up` | `make_straight_line` | 0.46 |
+| `put the blocks in a line` | `make_straight_line` | 0.42 |
+| `make me a cup of tea` | *(nothing)* | 0.24 → clarification |
+
+Below 0.35 Layer 2 returns a clarification rather than a plan, and the bridge
+treats that as terminal: `run_command.sh` exits 1 and the arm never moves.
 
 ## How Layer 3 works
 
