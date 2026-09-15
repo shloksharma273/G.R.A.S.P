@@ -102,29 +102,33 @@ class JobTests(unittest.TestCase):
         self.assertEqual(job["result"]["validation"]["plan"], ["boil_water", "pour_tea"])
 
     def test_stages_come_from_the_pipeline(self):
-        """The page names real boundaries, not an invented progress bar."""
-        from rulebook_generator.pipeline import STAGE_EXTRACTING, STAGE_VALIDATING
+        """The page names real boundaries, not an invented progress bar.
+
+        Observed through `status()`, the way the page sees it - wrapping the
+        private runner would break the moment its signature legitimately changed,
+        which is exactly what happened the first time this was written.
+        """
+        from rulebook_generator.pipeline import STAGE_EXTRACTING, STAGE_RENDERING, STAGE_VALIDATING
+
+        service = ScriptedGenerator()
+        job_id = service.start(transcript_text=TRANSCRIPT)["id"]
 
         seen = []
-        service = ScriptedGenerator()
-        original = service._run
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            job = service.status(job_id)
+            if job["stage"] not in seen:
+                seen.append(job["stage"])
+            if job["state"] != STATE_RUNNING:
+                break
+            time.sleep(0.005)
 
-        def watched(job, url, text):
-            def track(_self=None):
-                while job.state == STATE_RUNNING:
-                    if job.stage not in seen:
-                        seen.append(job.stage)
-                    time.sleep(0.005)
-            watcher = threading.Thread(target=track, daemon=True)
-            watcher.start()
-            original(job, url, text)
-
-        service._run = watched
-        wait(service, service.start(transcript_text=TRANSCRIPT)["id"])
-        # The extraction stage is the slow one, so it is the one that must appear.
-        self.assertTrue(
-            {STAGE_EXTRACTING, STAGE_VALIDATING} & set(seen) or seen,
-            f"no stage was observed: {seen}",
+        # Whatever the poller caught, the stage must have advanced past the one
+        # this module owns into the pipeline's own.
+        self.assertIn(
+            seen[-1],
+            {STAGE_EXTRACTING, STAGE_RENDERING, STAGE_VALIDATING},
+            f"stage never reached the pipeline: {seen}",
         )
 
     def test_a_non_procedural_transcript_is_rejected_not_crashed(self):
