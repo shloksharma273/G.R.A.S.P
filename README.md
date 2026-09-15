@@ -117,6 +117,33 @@ lists one required package, and `--transcript FILE` works without it.
 
 `0` accepted · `3` rejected · `4` flagged for review.
 
+### Ingesting without AutoGraph
+
+The normal path takes a rulebook through AutoGraph, which extracts a KG that
+Station 1 reads. That is the honest path — it proves a generated rulebook
+survives real extraction. But AutoGraph is a build cycle away, and sometimes it
+is down.
+
+```bash
+python ingest_rulebook.py generated/            # dry run, every rulebook there
+python ingest_rulebook.py generated/ --write    # apply
+```
+
+This skips AutoGraph and Station 1 — the bundles are built from the rulebook
+rather than extracted — and skips Station 3, because the rulebook already states
+which state is a precondition and which is an effect. Stations 2, 4 and 5 run in
+full: every relationship typed, the ordering derived and cycle-guarded, the
+subgraph written under the skill's own scope.
+
+It reuses the validation gate's own machinery rather than a second copy, so the
+two cannot drift. A rejected rulebook is skipped by default — a cycle cannot be
+planned, so writing it would put an unplannable subgraph in the graph — and
+`--force` writes it anyway for inspection.
+
+The trade is worth stating: **this measures the rulebook, not the extraction.** A
+rulebook that lands cleanly here can still lose something through AutoGraph, and
+only the real path will tell you that.
+
 
 ## Station 1 — Read
 
@@ -1206,8 +1233,9 @@ rulebook_generator/       Station 0 — Rulebook Generator
   config.py     model, strictness, auto-ingest
   cache.py      reproducibility by transcript hash                (FR-6)
   pipeline.py   the five stages
+  direct.py     the shortcut: a rulebook file -> the PlanGraph
   report.py     the run summary
-  cli.py        entry point
+  cli.py        entry point · direct_cli.py  the ingest entry point
 layer2_planning/          Layer 2 — Planning
   config.py     threshold, top-k, model                       (Section 9)
   retrieve.py   Stage 1: goal resolution + the guardrail      (FR-2)
@@ -1259,6 +1287,7 @@ rule_preclassifier/       Station 2 — Rule Pre-Classifier
   report.py     the run summary                               (FR-7)
   cli.py        entry point; the only part that does I/O
 generate_rulebook.py       Station 0 launcher: a video link in, a rulebook out
+ingest_rulebook.py         a rulebook straight into the PlanGraph (skips AutoGraph)
 read_kg.py                 Station 1 launcher
 classify_kg.py             Station 2 launcher
 disambiguate_kg.py         Station 3 launcher

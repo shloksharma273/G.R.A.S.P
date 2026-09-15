@@ -18,7 +18,7 @@ import traceback
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from kg_read_harness.errors import ConfigError, HarnessError
 
@@ -44,6 +44,9 @@ class Job:
     result: dict[str, Any] | None = None
     error: str = ""
     source: str = ""
+    #: What the source turned out to be, for a source that had to be assembled -
+    #: which repo, which ref, which pages were actually read.
+    detail: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +54,7 @@ class Job:
             "state": self.state,
             "stage": self.stage,
             "source": self.source,
+            "detail": self.detail,
             "result": self.result,
             "error": self.error,
         }
@@ -110,11 +114,29 @@ class GeneratorService:
 
     # --- jobs ---------------------------------------------------------------
 
-    def start(self, url: str = "", transcript_text: str = "") -> dict[str, Any]:
-        """Begin a generation. Returns the job to poll."""
+    def start(
+        self,
+        url: str = "",
+        transcript_text: str = "",
+        prepare: Callable[[], dict[str, Any]] | None = None,
+        prepare_stage: str = STAGE_FETCHING,
+        source_label: str = "",
+    ) -> dict[str, Any]:
+        """Begin a generation. Returns the job to poll.
+
+        `prepare` is for a source that has to be assembled before it can be read -
+        a set of pages from a documentation repo, say. It runs inside the job
+        thread, under `prepare_stage`, and returns `{"text", "source_url", ...}`.
+        Doing it here rather than in the POST keeps the slow part behind the same
+        polling the extraction already uses, so the page can say what it is doing
+        instead of holding a request open.
+
+        Text that arrives through `prepare` is documentation, not speech, so it is
+        cleaned and prompted as a manual (see `rulebook_generator.transcript`).
+        """
         url = (url or "").strip()
         transcript_text = (transcript_text or "").strip()
-        if not url and not transcript_text:
+        if prepare is None and not url and not transcript_text:
             return {"error": "Give a video link, or paste a transcript."}
 
         try:
@@ -122,7 +144,11 @@ class GeneratorService:
         except ConfigError as error:
             return {"error": error.message, "hint": error.hint}
 
-        job = Job(id=uuid.uuid4().hex[:12], source=url or "pasted transcript")
+        job = Job(
+            id=uuid.uuid4().hex[:12],
+            stage=prepare_stage,
+            source=source_label or url or "pasted transcript",
+        )
         with self._lock:
             self._jobs[job.id] = job
             self._order.append(job.id)
@@ -130,7 +156,8 @@ class GeneratorService:
                 self._jobs.pop(self._order.pop(0), None)
 
         thread = threading.Thread(
-            target=self._run, args=(job, url, transcript_text), daemon=True
+            target=self._run, args=(job, url, transcript_text, prepare, prepare_stage),
+            daemon=True,
         )
         thread.start()
         return job.to_dict()
@@ -140,7 +167,14 @@ class GeneratorService:
             job = self._jobs.get(job_id)
         return job.to_dict() if job else None
 
-    def _run(self, job: Job, url: str, transcript_text: str) -> None:
+    def _run(
+        self,
+        job: Job,
+        url: str,
+        transcript_text: str,
+        prepare: Callable[[], dict[str, Any]] | None = None,
+        prepare_stage: str = STAGE_FETCHING,
+    ) -> None:
         from rulebook_generator.cache import PayloadCache
         from rulebook_generator.pipeline import generate
         from rulebook_generator.transcript import Transcript, clean, from_youtube
@@ -148,8 +182,27 @@ class GeneratorService:
         try:
             config = self.config()
 
-            job.stage = STAGE_FETCHING
-            if transcript_text:
+            job.stage = prepare_stage if prepare is not None else STAGE_FETCHING
+            if prepare is not None:
+                prepared = prepare()
+                text = clean(str(prepared.get("text") or ""), caption_artifacts=False)
+                if not text:
+                    raise HarnessError(
+                        "those pages contain no readable text.",
+                        "choose pages that describe a procedure.",
+                    )
+                transcript = Transcript(
+                    text=text,
+                    video_id=str(prepared.get("source_url") or job.source),
+                    source="manual",
+                    url=str(prepared.get("source_url") or ""),
+                )
+                job.detail = {
+                    key: prepared[key]
+                    for key in ("repo", "ref", "paths", "skipped")
+                    if key in prepared
+                }
+            elif transcript_text:
                 text = clean(transcript_text)
                 if not text:
                     raise HarnessError(
@@ -187,6 +240,9 @@ class GeneratorService:
     def _serialize(result: Any, config: Any) -> dict[str, Any]:
         payload = result.to_dict()
         payload["markdown"] = result.markdown
+        payload["source_kind"] = (
+            "manual" if result.transcript and result.transcript.source == "manual" else "video"
+        )
         payload["writable"] = result.verdict in config.accepts
         payload["filename"] = (
             f"rulebook_{result.rulebook.skill}.md" if result.rulebook else "rulebook.md"

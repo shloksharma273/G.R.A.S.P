@@ -34,6 +34,7 @@ examples:
   python generate_rulebook.py https://youtu.be/VIDEOID
   python generate_rulebook.py VIDEOID --show                # print the markdown
   python generate_rulebook.py --transcript captions.txt     # no network needed
+  python generate_rulebook.py --transcript manual.md --manual   # from documentation
   python generate_rulebook.py VIDEOID --write --ingest      # link-in to plan-out
 
 the gate:
@@ -74,6 +75,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--transcript", metavar="PATH", help="use a local caption file instead of fetching"
     )
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        help=(
+            "the --transcript file is written documentation, not speech: keep its "
+            "parentheses and line structure, and read preconditions off the page "
+            "rather than inferring them"
+        ),
+    )
     parser.add_argument("--write", action="store_true", help="save the rulebook to the output dir")
     parser.add_argument(
         "--ingest",
@@ -90,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
 def run(
     url: str | None = None,
     transcript_path: str | None = None,
+    manual: bool = False,
     write: bool = False,
     do_ingest: bool = False,
     show: bool = False,
@@ -107,7 +118,7 @@ def run(
         config = dataclasses.replace(config, cache_enabled=False)
 
     transcript = (
-        from_file(transcript_path, url=url or "")
+        from_file(transcript_path, url=url or "", manual=manual)
         if transcript_path
         else from_youtube(url or "")
     )
@@ -158,6 +169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run(
             url=args.url,
             transcript_path=args.transcript,
+            manual=args.manual,
             write=args.write,
             do_ingest=args.ingest,
             show=args.show,

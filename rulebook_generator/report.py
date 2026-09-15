@@ -29,15 +29,22 @@ def print_report(
     stream = stream if stream is not None else sys.stdout
     g = glyphs(stream)
 
-    print(f"Rulebook Generator {g['em']} video to rulebook", file=stream)
+    manual = bool(result.transcript and result.transcript.source == "manual")
+    print(
+        f"Rulebook Generator {g['em']} "
+        + ("documentation to rulebook" if manual else "video to rulebook"),
+        file=stream,
+    )
     print("=" * RULE_WIDTH, file=stream)
     width = max(len(label) for label, _ in config.describe())
     for label, value in config.describe():
         print(f"  {label:<{width}}  {value}", file=stream)
     if result.transcript:
-        print(f"  {'video':<{width}}  {result.transcript.url or result.transcript.video_id}",
+        source_label = "document" if manual else "video"
+        body_label = "text" if manual else "transcript"
+        print(f"  {source_label:<{width}}  {result.transcript.url or result.transcript.video_id}",
               file=stream)
-        print(f"  {'transcript':<{width}}  {result.transcript.words} words"
+        print(f"  {body_label:<{width}}  {result.transcript.words} words"
               + ("  (truncated)" if result.truncated else ""), file=stream)
     print("=" * RULE_WIDTH, file=stream)
 
@@ -49,8 +56,13 @@ def print_report(
         print(f"  primitives  {len(book.primitives)}", file=stream)
         print(f"  states      {len(book.states)}", file=stream)
         print(f"  objects     {len(book.objects)}", file=stream)
-        print(f"  requires    {sum(len(p.requires) for p in book.primitives)}"
-              "   (mostly inferred - the transcript rarely states these)", file=stream)
+        gloss = (
+            "   (mostly stated - read off the documentation)"
+            if manual
+            else "   (mostly inferred - the transcript rarely states these)"
+        )
+        print(f"  requires    {sum(len(p.requires) for p in book.primitives)}" + gloss,
+              file=stream)
         print(f"  produces    {sum(len(p.produces) for p in book.primitives)}", file=stream)
         if result.from_cache:
             print("  source      cached (no model call)", file=stream)

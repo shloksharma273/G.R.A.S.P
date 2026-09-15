@@ -117,6 +117,109 @@ WORKED_EXAMPLE = {
     ],
 }
 
+
+MANUAL_SYSTEM_PROMPT = """\
+You turn a section of written technical documentation - an operating manual, a \
+procedure, a reference page - into a structured robot skill rulebook.
+
+This is NOT a video transcript, and the difference matters. A narrator skips \
+preconditions; a manual is largely *made* of them. So the job inverts:
+
+- primitives   stated as steps, headings or imperative sentences
+- objects      stated - the components, subsystems and parameters named
+- states       mostly stated as conditions, readiness criteria, checks
+- requires     MOSTLY STATED. Read them off the page. A line like "before arming,
+               confirm GPS lock is acquired" IS a precondition; capture it. Infer
+               one only where the document plainly implies it and never states it.
+- produces     mostly stated - what the step leaves true, what the system enters
+- ordering     stated by sequence, numbering, and the conditions themselves
+
+Rules:
+1. Do NOT invent preconditions. In a transcript, inferring an unstated \
+precondition is the job; in a manual, an invented one contradicts a document \
+that was specific on purpose. If the manual states a condition, use its wording. \
+If it states none for a step, leave `requires` empty rather than guessing.
+2. Every primitive must be GROUNDED: the action must actually appear in the \
+document. Do not add steps the manual does not describe.
+3. A state is a condition of the system that is true or false - `gps_lock_acquired`, \
+`vehicle_armed`. It is not an action and not a parameter value.
+4. Keep the document's own vocabulary. If it says "prearmed", the state is \
+`vehicle_prearmed`, not `motors_partly_on`. Downstream tools match on these names.
+5. Numeric thresholds and parameter names belong in `narration`, not in state \
+names. `battery_above_minimum` is a state; `COM_ARM_BAT_MIN` and its value are \
+narration.
+6. Use snake_case for every name, and never put "and" inside a name. A state \
+called `armed_and_airborne` is two states; write them separately.
+7. Every state in `requires` should be produced by an earlier primitive unless it \
+is true at the start. Aim for a graph with no gaps.
+8. A manual usually documents SEVERAL procedures. Cover the one continuous \
+procedure this section is about. If the text covers unrelated procedures, take the \
+FIRST coherent one, ignore the rest, and set "multiple_tasks": true.
+9. If the text is not a procedure at all - a parameter table, a changelog, a \
+specification list - return exactly {"not_procedural": true, "reason": "..."} and \
+nothing else.
+
+Return a single JSON object and nothing else, of exactly this shape:
+"""
+
+#: A worked example in the manual register, deliberately from an unrelated domain
+#: so it teaches the *grain* - stated preconditions, the document's own words -
+#: rather than handing over vocabulary the model might parrot back.
+MANUAL_WORKED_EXAMPLE = {
+    "skill": "run_centrifuge_cycle",
+    "title": "Centrifuge Cycle",
+    "overview": (
+        "This rulebook describes running a cycle on a benchtop centrifuge as a "
+        "sequence of primitive robot actions, with the preconditions the operating "
+        "manual states for each step."
+    ),
+    "objects": ["centrifuge", "rotor", "lid", "sample_tubes", "control_panel"],
+    "states": [
+        "rotor_seated", "load_balanced", "lid_closed", "lid_latched",
+        "speed_set", "cycle_running", "rotor_stopped",
+    ],
+    "primitives": [
+        {
+            "name": "seat_rotor",
+            "narration": "The robot seats the rotor on the drive spindle and tightens the nut.",
+            "requires": [],
+            "produces": ["rotor_seated"],
+            "uses": ["rotor", "centrifuge"],
+        },
+        {
+            "name": "load_tubes",
+            "narration": (
+                "The robot loads sample tubes in opposing pairs of equal mass. The manual "
+                "requires the rotor to be seated and the load balanced to within 0.5 g."
+            ),
+            "requires": ["rotor_seated"],
+            "produces": ["load_balanced"],
+            "uses": ["sample_tubes", "rotor"],
+        },
+        {
+            "name": "close_lid",
+            "narration": "The robot closes the lid until the latch engages.",
+            "requires": ["load_balanced"],
+            "produces": ["lid_closed", "lid_latched"],
+            "uses": ["lid"],
+        },
+        {
+            "name": "start_cycle",
+            "narration": (
+                "The robot presses start. The manual states that the cycle will not begin "
+                "unless the lid is latched and a speed has been set."
+            ),
+            "requires": ["lid_latched", "speed_set"],
+            "produces": ["cycle_running"],
+            "uses": ["control_panel", "centrifuge"],
+        },
+    ],
+    "ordering": [
+        "The rotor must be seated before tubes are loaded.",
+        "The load must be balanced and the lid latched before the cycle can start.",
+    ],
+}
+
 REPROMPT_SUFFIX = (
     "\n\nYour previous reply could not be used. Return ONLY the JSON object of the "
     "shape given above - no prose, no code fences - with every name in snake_case "
@@ -124,7 +227,23 @@ REPROMPT_SUFFIX = (
 )
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(manual: bool = False) -> str:
+    """The extraction prompt for the kind of source in hand.
+
+    The two registers pull in opposite directions, so they get opposite prompts and
+    opposite worked examples. Video: preconditions are absent and must be inferred.
+    Manual: preconditions are on the page and inventing one contradicts a document
+    that was deliberately specific.
+    """
+    if manual:
+        return (
+            MANUAL_SYSTEM_PROMPT
+            + json.dumps(INTERMEDIATE_SCHEMA, indent=2)
+            + "\n\nHere is one complete worked example, from the operating manual for a "
+            "benchtop centrifuge. Note that `start_cycle` requires `lid_latched` because "
+            "the manual says so - it is read off the page, not guessed:\n\n"
+            + json.dumps(MANUAL_WORKED_EXAMPLE, indent=2)
+        )
     return (
         SYSTEM_PROMPT
         + json.dumps(INTERMEDIATE_SCHEMA, indent=2)
@@ -135,7 +254,13 @@ def build_system_prompt() -> str:
     )
 
 
-def build_user_message(transcript: Transcript) -> str:
+def build_user_message(transcript: Transcript, manual: bool = False) -> str:
+    if manual:
+        return (
+            "Reconstruct the rulebook for the procedure described in this "
+            "documentation.\n\n"
+            f"DOCUMENTATION ({transcript.words} words):\n{transcript.text}"
+        )
     return (
         "Reconstruct the rulebook for the task described in this transcript.\n\n"
         f"TRANSCRIPT ({transcript.words} words):\n{transcript.text}"
@@ -184,9 +309,17 @@ def extract(
     provider: Provider,
     model: str,
     cache: Any = None,
+    manual: bool | None = None,
 ) -> Extraction:
-    """One schema-constrained pass, cached by transcript hash (FR-3, FR-6)."""
-    key = f"{model}|{transcript.digest}"
+    """One schema-constrained pass, cached by transcript hash (FR-3, FR-6).
+
+    `manual` selects the documentation prompt instead of the transcript one; left
+    as None it follows the transcript's own source. It is part of the cache key
+    because the two prompts give different rulebooks for identical input text, and
+    a cache that ignored the mode would serve one for the other.
+    """
+    manual = (transcript.source == "manual") if manual is None else manual
+    key = f"{model}|{'manual' if manual else 'video'}|{transcript.digest}"
     if cache is not None:
         cached = cache.get(key)
         if cached is not None:
@@ -203,8 +336,8 @@ def extract(
             except ExtractionFailed:
                 pass  # an unusable cached reply behaves as a miss
 
-    system = build_system_prompt()
-    user = build_user_message(transcript)
+    system = build_system_prompt(manual=manual)
+    user = build_user_message(transcript, manual=manual)
     reprompted = False
 
     for attempt in (0, 1):

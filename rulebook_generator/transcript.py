@@ -81,15 +81,32 @@ def video_id(url: str) -> str:
     )
 
 
-def clean(raw: str) -> str:
+def clean(raw: str, caption_artifacts: bool = True) -> str:
     """Caption text to prose: drop the noise, undo the overlap, join the cues.
 
     Auto-generated captions arrive as overlapping windows — each cue repeats the
     tail of the one before — so joining them naively triples the text and teaches
     the model that everything was said three times.
+
+    `caption_artifacts=False` is for written documentation rather than speech.
+    Both repairs above are *wrong* on a manual. The noise pattern strips
+    parenthesised spans because captions use them for `(applause)`; a manual uses
+    them for `(HDOP below 2.0)`, and that parenthesis is the precondition. The
+    de-overlap deletes a repeated phrase, which in a procedure list is a real
+    repeated step rather than a duplicated cue. Line structure is kept too: a
+    manual's bullets are its step boundaries, and flattening them into one prose
+    blob throws away the clearest signal in the document.
     """
-    text = _NOISE.sub(" ", raw or "")
-    text = text.replace(" ", " ")
+    text = (raw or "").replace(" ", " ")
+    if not caption_artifacts:
+        stripped = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
+        kept: list[str] = []
+        for line in stripped:
+            if line or (kept and kept[-1]):
+                kept.append(line)
+        return "\n".join(kept).strip()
+
+    text = _NOISE.sub(" ", text)
 
     words: list[str] = []
     for line in text.splitlines():
@@ -107,16 +124,21 @@ def clean(raw: str) -> str:
     return re.sub(r"\s+", " ", " ".join(words)).strip()
 
 
-def from_file(path: str | Path, url: str = "") -> Transcript:
+def from_file(path: str | Path, url: str = "", manual: bool = False) -> Transcript:
     """Captions from a local file — plain text, or one cue per line."""
     raw = Path(path).read_text(encoding="utf-8")
-    text = clean(raw)
+    text = clean(raw, caption_artifacts=not manual)
     if not text:
         raise NoCaptions(
             f"{path} contains no usable caption text.",
             "supply a file with the spoken words, one cue per line or as prose.",
         )
-    return Transcript(text=text, video_id=url or str(path), source="file", url=url)
+    return Transcript(
+        text=text,
+        video_id=url or str(path),
+        source="manual" if manual else "file",
+        url=url,
+    )
 
 
 def from_youtube(url: str, languages: tuple[str, ...] = ("en", "en-US", "en-GB")) -> Transcript:

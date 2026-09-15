@@ -108,7 +108,10 @@ def generate(
     # --- Stage 2: structured extraction ------------------------------------
     announce(STAGE_EXTRACTING)
     try:
-        extraction = extract(bounded, provider, config.llm.model, cache=cache)
+        extraction = extract(
+            bounded, provider, config.llm.model, cache=cache,
+            manual=bounded.source == "manual",
+        )
     except NotProcedural as error:
         result.verdict = REJECT
         result.reason = f"not a procedural task: {error}"

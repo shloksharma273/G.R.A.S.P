@@ -131,7 +131,7 @@ def to_bundles(rulebook: Rulebook) -> list[Bundle]:
     return bundles
 
 
-def _resolved(bundle: Bundle, label: str) -> ResolvedEdge:
+def resolved_edge(bundle: Bundle, label: str) -> ResolvedEdge:
     """Station 3's record, with the label taken from the rulebook itself.
 
     The generator already knows which edges are preconditions and which are
@@ -246,10 +246,14 @@ def _check_declarations(rulebook: Rulebook, report: ValidationReport) -> None:
         )
 
 
-def _bridge(rulebook: Rulebook, report: ValidationReport) -> Any:
-    """Stations 2 and 4 over the generated rulebook. None if it cannot be built."""
-    bundles = to_bundles(rulebook)
-    classified = classify(bundles)
+def to_stamped_edges(rulebook: Rulebook) -> list[Any]:
+    """The rulebook as Stations 2 and 3 would stamp it.
+
+    Station 3 is not consulted: the rulebook already says which state is a
+    precondition and which is an effect - it wrote them - so asking a model to
+    re-derive that would measure Station 3 rather than the rulebook.
+    """
+    classified = classify(to_bundles(rulebook))
 
     labels = {}
     for primitive in rulebook.primitives:
@@ -269,7 +273,13 @@ def _bridge(rulebook: Rulebook, report: ValidationReport) -> Any:
         )
         if label is None:
             label = "requires" if "requires" in bundle.description else "produces"
-        edges.append(_resolved(bundle, label))
+        edges.append(resolved_edge(bundle, label))
+    return edges
+
+
+def _bridge(rulebook: Rulebook, report: ValidationReport) -> Any:
+    """Stations 2 and 4 over the generated rulebook. None if it cannot be built."""
+    edges = to_stamped_edges(rulebook)
 
     try:
         result = normalize_edges(edges)

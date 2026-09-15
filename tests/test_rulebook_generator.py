@@ -559,6 +559,101 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["verdict"], ACCEPT)
 
 
+class ManualSourceTests(unittest.TestCase):
+    """Written documentation is not speech, and must not be cleaned like speech."""
+
+    MANUAL = (
+        "Arming the Vehicle\n"
+        "Before arming, confirm the following:\n"
+        "- GPS lock is acquired (HDOP below 2.0)\n"
+        "- Battery voltage above the minimum [see COM_ARM_BAT_MIN]\n"
+        "To arm, hold the throttle down and rudder right for one second.\n"
+    )
+
+    def _write(self, text):
+        handle = tempfile.NamedTemporaryFile(
+            "w", suffix=".md", delete=False, encoding="utf-8"
+        )
+        handle.write(text)
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def test_manual_cleaning_keeps_parenthesised_thresholds(self):
+        """The parenthesis holds the precondition; caption cleaning deletes it."""
+        cleaned = clean(self.MANUAL, caption_artifacts=False)
+        self.assertIn("(HDOP below 2.0)", cleaned)
+        self.assertIn("[see COM_ARM_BAT_MIN]", cleaned)
+
+    def test_caption_cleaning_still_strips_that_noise(self):
+        cleaned = clean(self.MANUAL)
+        self.assertNotIn("HDOP", cleaned)
+        self.assertNotIn("COM_ARM_BAT_MIN", cleaned)
+
+    def test_manual_cleaning_keeps_the_step_boundaries(self):
+        """A manual's bullets are its steps; flattening them loses the structure."""
+        self.assertIn("\n", clean(self.MANUAL, caption_artifacts=False))
+
+    def test_manual_cleaning_does_not_de_overlap(self):
+        """A repeated line in a procedure is a repeated step, not a duplicated cue."""
+        repeated = "lower the landing gear\nlower the landing gear\n"
+        self.assertEqual(
+            clean(repeated, caption_artifacts=False).count("lower the landing gear"), 2
+        )
+        self.assertEqual(clean(repeated).count("lower the landing gear"), 1)
+
+    def test_from_file_marks_the_source_as_manual(self):
+        path = self._write(self.MANUAL)
+        self.assertEqual(from_file(path, manual=True).source, "manual")
+        self.assertEqual(from_file(path).source, "file")
+
+    def test_an_empty_manual_is_still_an_error(self):
+        with self.assertRaises(NoCaptions):
+            from_file(self._write("   \n\n  "), manual=True)
+
+    def test_the_manual_prompt_inverts_the_inference_instruction(self):
+        video, manual = build_system_prompt(), build_system_prompt(manual=True)
+        self.assertIn("ALMOST NEVER STATED", video)
+        self.assertIn("MOSTLY STATED", manual)
+        self.assertIn("Do NOT invent preconditions", manual)
+
+    def test_the_manual_prompt_still_demands_grounded_primitives(self):
+        """The asymmetry holds in both registers: no invented actions."""
+        self.assertIn("GROUNDED", build_system_prompt(manual=True))
+
+    def test_the_manual_prompt_carries_its_own_worked_example(self):
+        manual = build_system_prompt(manual=True)
+        self.assertIn("run_centrifuge_cycle", manual)
+        # `make_masala_chai` also appears in the shared schema, so key on a name
+        # unique to the chai worked example itself.
+        self.assertNotIn("place_pan", manual)
+        self.assertIn("place_pan", build_system_prompt())
+
+    def test_the_two_modes_do_not_share_a_cache_entry(self):
+        """Identical text, two prompts, two rulebooks - one key would serve the wrong one."""
+        directory = tempfile.mkdtemp()
+        path = os.path.join(directory, "cache.json")
+        cache = PayloadCache(path)
+        text = Transcript(text="the robot boils water", video_id="v", source="manual")
+
+        provider = fake_llm.FakeProvider(fake_llm.config(), responder(CHAI))
+        extract(text, provider, "m", cache=cache, manual=True)
+        extract(text, provider, "m", cache=cache, manual=False)
+
+        self.assertEqual(len(cache), 2)
+        self.assertEqual(provider.requests_made, 2)
+
+    def test_the_mode_follows_the_transcript_when_unspecified(self):
+        provider = fake_llm.FakeProvider(fake_llm.config(), responder(CHAI))
+        extract(
+            Transcript(text="power up the vehicle", video_id="v", source="manual"),
+            provider, "m",
+        )
+        system, user = provider.prompts[0]
+        self.assertIn("MOSTLY STATED", system)
+        self.assertIn("DOCUMENTATION", user)
+
+
 class GeneratedCorpusTests(unittest.TestCase):
     """Anything the generator has actually written must still pass its own gate."""
 
@@ -584,7 +679,7 @@ class EndToEndTests(unittest.TestCase):
         from layer2_planning import load_planner_config, plan_command
         from plangraph_writer import build, write_plangraph
         from plangraph_writer.config import load_writer_config
-        from rulebook_generator.validate import _resolved
+        from rulebook_generator.validate import resolved_edge
         from rule_preclassifier import classify
 
         from .corpus_fixture import ENV as WRITER_ENV
@@ -598,7 +693,7 @@ class EndToEndTests(unittest.TestCase):
         for item in classified.deferred:
             bundle = item.bundle
             label = "requires" if "requires" in bundle.description else "produces"
-            edges.append(_resolved(bundle, label))
+            edges.append(resolved_edge(bundle, label))
 
         writer_config = load_writer_config(WRITER_ENV, dry_run=False)
         db = make_db()

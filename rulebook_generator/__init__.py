@@ -18,6 +18,7 @@ gate is mandatory rather than advisory.
 
 from .cache import PayloadCache
 from .config import GeneratorConfig, load_generator_config
+from .direct import IngestResult, IngestRun, find_rulebooks, ingest_all, ingest_rulebook
 from .extract import ExtractionFailed, NotProcedural, extract
 from .ingest import ingest, write_rulebook
 from .parse import parse_file, parse_text
@@ -26,7 +27,7 @@ from .render import render
 from .report import dump_json, print_report
 from .schema import ACCEPT, FLAG, REJECT, Primitive, Rulebook
 from .transcript import NoCaptions, Transcript, from_file, from_youtube, video_id
-from .validate import ValidationReport, to_bundles, validate
+from .validate import ValidationReport, to_bundles, to_stamped_edges, validate
 
 __version__ = "1.0.0"
 
@@ -43,6 +44,12 @@ __all__ = [
     "validate",
     "ValidationReport",
     "to_bundles",
+    "to_stamped_edges",
+    "ingest_rulebook",
+    "ingest_all",
+    "find_rulebooks",
+    "IngestResult",
+    "IngestRun",
     "extract",
     "ExtractionFailed",
     "NotProcedural",
