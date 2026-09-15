@@ -2,10 +2,12 @@
 
 **GraphRAG → Action** — an AutoGraph knowledge graph becomes a typed planning
 graph, and a natural-language command becomes an ordered, executable plan.
-**All five bridge stations plus Layer 2 planning are built.**
+**All five bridge stations plus Layer 2 planning are built**, with a generator
+upstream that can author the rulebooks themselves from video.
 
 | Station | What it does | Status |
 | --- | --- | --- |
+| **0** · Rulebook generator | video link → canonical rulebook | built (`rulebook_generator/`) |
 | 1 · Read | KG → relationship bundles | built (`kg_read_harness/`) |
 | 2 · Rule pre-classify | bundles → edge types by entity-type pair | built (`rule_preclassifier/`) |
 | 3 · LLM disambiguate | resolve `requires` vs `produces` | not started |
@@ -15,6 +17,106 @@ graph, and a natural-language command becomes an ordered, executable plan.
 | **UI** · Web front end | ask in a browser, read the plan | built (`grasp_web/`) |
 
 ---
+
+---
+
+## Station 0 — Rulebook Generator
+
+**From a video link to a canonical rulebook, gated by round-trip validation.**
+
+Everything else in this project begins at "a rulebook enters AutoGraph". This
+produces that rulebook. It sits **entirely upstream of Layer 1** and changes
+nothing downstream — its only output is a rulebook in the format the pipeline
+already consumes, so no station can tell a generated one from an authored one.
+
+Implements `PRD_Rulebook_Generator.docx`.
+
+```bash
+python generate_rulebook.py https://youtu.be/VIDEOID
+python generate_rulebook.py VIDEOID --show --write
+python generate_rulebook.py --transcript captions.txt   # no network needed
+```
+
+### The crux is reconstruction, not transcription
+
+Fetching captions is trivial. Turning them into a precondition graph is not.
+Narration is chatty, skips the obvious, says "this" and "that", and — the part
+that matters — **almost never states a precondition**. Nobody says "the water
+must be boiling before you add the pasta"; they just add the pasta.
+
+| Element | Where it comes from |
+| --- | --- |
+| primitives | mostly stated — find the action boundaries |
+| objects | mostly stated — resolve "this" → the pan |
+| states | partly stated, largely inferred |
+| **`requires`** | **almost never stated — inferred** |
+| `produces` | partly stated, partly inferred |
+
+So the prompt carries the chai rulebook as a full worked example and points at
+`add_water requires pan_on_stove` — "the inference you are being asked to make".
+Primitives must be **grounded** in the narration; preconditions may be inferred.
+That asymmetry is what makes inference safe: the model may reason downward into
+states, never outward into actions it invented.
+
+### The validation gate is the point
+
+Because the load-bearing part is inferred, the gate is mandatory rather than
+advisory. And it is not a private reimplementation of "looks right" — the
+rulebook is run through **this project's own bridge**:
+
+```
+render → parse       the markdown carries the whole intermediate
+→ Station 2          types every relationship
+→ Station 4          derives the ordering and guards the cycle
+→ checks             DAG · no orphan preconditions · producible goal · valid sort
+```
+
+Verdict is `accept`, `flag_for_review`, or `reject`. **Only an accept is ever
+auto-ingested** — not configurable, because a wrong precondition becomes a plan a
+robot would try to execute.
+
+The round-trip half deserves its own note: `parse(render(x))` must recover `x`.
+That is a far stronger claim than "the markdown looked fine", and it caught a real
+defect on the first live video — a state the model named `pasta_oiled_and_mixed`
+cannot survive a prose list that separates items with "and".
+
+### What it does on real videos
+
+| Video | Verdict | Why |
+| --- | --- | --- |
+| A single recipe | accept | passes every check |
+| A "basics" compilation | reject | takes one task and flags it, then finds a cycle in the inferred preconditions |
+| Rick Astley | reject | *"the lyrics of a song, not a how-to task. It contains no actions, objects, or procedural steps to reconstruct."* |
+
+The compilation case is the gate earning its keep. Before the prompt was told
+about roundups, the model fused pasta, rice, onion, salmon and knife-sharpening
+into one 40-step "skill"; now it takes the first coherent task, sets
+`multiple_tasks`, and the gate flags it. It is still rejected — the model inferred
+a circular dependency between two onion-slicing steps — which is precisely the
+kind of plausible-looking nonsense that would have reached a robot without a gate.
+
+### Reproducibility
+
+Temperature 0, and a cache keyed on the transcript hash: the same video yields the
+same rulebook and issues no second call.
+
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RULEBOOK_MODEL` | `LLM_MODEL` | overrides the model for extraction |
+| `RULEBOOK_STRICTNESS` | `normal` | `lenient` also writes flagged rulebooks (never ingests them) |
+| `RULEBOOK_OUTPUT_DIR` | `generated` | where accepted rulebooks land |
+| `RULEBOOK_CACHE` / `_PATH` | on | the reproducibility store |
+| `RULEBOOK_AUTO_INGEST` | off | push to AutoGraph on accept |
+
+`youtube-transcript-api` is an **optional** dependency — `requirements.txt` still
+lists one required package, and `--transcript FILE` works without it.
+
+### Exit codes
+
+`0` accepted · `3` rejected · `4` flagged for review.
+
 
 ## Station 1 — Read
 
@@ -1062,6 +1164,20 @@ grasp_web/                Web front end
   server.py     stdlib HTTP: four JSON routes plus the static page
   cli.py        entry point
   static/       index.html · app.css · app.js
+
+rulebook_generator/       Station 0 — Rulebook Generator
+  transcript.py captions -> clean prose; optional YouTube fetch  (FR-2)
+  schema.py     the structured intermediate                      (Section 6)
+  extract.py    schema-constrained LLM pass + worked example      (FR-3)
+  render.py     intermediate -> canonical markdown                (FR-4)
+  parse.py      markdown -> intermediate; the round-trip reader
+  validate.py   the gate: round-trip + the real bridge            (FR-5)
+  ingest.py     optional auto-ingest to AutoGraph                 (FR-8)
+  config.py     model, strictness, auto-ingest
+  cache.py      reproducibility by transcript hash                (FR-6)
+  pipeline.py   the five stages
+  report.py     the run summary
+  cli.py        entry point
 layer2_planning/          Layer 2 — Planning
   config.py     threshold, top-k, model                       (Section 9)
   retrieve.py   Stage 1: goal resolution + the guardrail      (FR-2)
@@ -1112,6 +1228,7 @@ rule_preclassifier/       Station 2 — Rule Pre-Classifier
   classifier.py the pure classify() function + conservation   (FR-3, FR-6)
   report.py     the run summary                               (FR-7)
   cli.py        entry point; the only part that does I/O
+generate_rulebook.py       Station 0 launcher: a video link in, a rulebook out
 read_kg.py                 Station 1 launcher
 classify_kg.py             Station 2 launcher
 disambiguate_kg.py         Station 3 launcher

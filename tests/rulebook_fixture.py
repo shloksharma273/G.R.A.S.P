@@ -11,6 +11,10 @@ fact that the rulebooks share one rigid template; real extraction is AutoGraph's
 job and is far harder. What it buys is the ability to check that Stations 2-5 and
 Layer 2 hold up on six different tasks rather than one.
 
+The reading itself now lives in `rulebook_generator.parse`, where it is a real
+component (the round-trip half of the generator's validation gate). This module
+imports it rather than keeping a second copy, so the two cannot drift.
+
 The wording it emits mirrors what AutoGraph produced for chai, so the lexical
 pre-pass and the LLM see the same kind of text they would in a live build.
 """
@@ -22,6 +26,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from kg_read_harness.bundle import Bundle, Entity
+from rulebook_generator.parse import (
+    EFFECT as _EFFECT_PATTERN,
+    PRECONDITION as _PRECONDITION_PATTERN,
+    is_subsequence,
+    listed as _listed_shared,
+    matches as _matches_shared,
+    normalize as _normalize_shared,
+    section as _section_shared,
+    sentences as _sentences_shared,
+    tokens as _tokens_shared,
+)
 
 DATASET = Path(__file__).resolve().parent.parent / "dataset"
 CHAI = Path(__file__).resolve().parent.parent / "masala_chai_rulebook.md"

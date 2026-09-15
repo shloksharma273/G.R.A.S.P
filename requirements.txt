@@ -1,2 +1,7 @@
 # Minimal dependencies (PRD Section 10): one ArangoDB client library, nothing else.
 python-arango>=7.9,<9
+
+# Optional — only for fetching YouTube captions in the Rulebook Generator.
+# Everything else, including `generate_rulebook.py --transcript FILE`, works
+# without it. Install with:  pip install youtube-transcript-api
+# youtube-transcript-api>=1.0
