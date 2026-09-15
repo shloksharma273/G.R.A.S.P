@@ -7,11 +7,19 @@ ArangoDB traversal and at most one model call, and those are independent.
 
 Routes:
 
-    GET  /                 the page
-    GET  /static/<file>    its assets
-    GET  /api/health       what the planner is connected to
-    GET  /api/skills       what it can plan
-    POST /api/plan         a command in, a plan or a clarification out
+    GET  /                       the planning page
+    GET  /generate               the rulebook generator page
+    GET  /static/<file>          their assets
+    GET  /api/health             what the planner is connected to
+    GET  /api/skills             what it can plan
+    POST /api/plan               a command in, a plan or a clarification out
+    GET  /api/generate/health    what the generator is configured to do
+    GET  /api/generate/library   rulebooks already on disk
+    POST /api/generate           start a generation, get a job id
+    GET  /api/generate/<job>     poll that job
+
+Generation is slow enough to need a job: the POST starts one and returns
+immediately, and the page polls for the stage it has reached.
 
 Bound to localhost by default. This is a developer tool over a database with
 write credentials in its environment, so it should not be listening on a public
@@ -28,6 +36,7 @@ from typing import Any
 
 from . import __version__
 from .api import PlannerService
+from .generate import GeneratorService
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -78,14 +87,25 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         service: PlannerService = self.server.service  # type: ignore[attr-defined]
 
+        generator: GeneratorService = self.server.generator  # type: ignore[attr-defined]
+
         if path == "/":
             self._static("index.html")
+        elif path == "/generate":
+            self._static("generate.html")
         elif path.startswith("/static/"):
             self._static(path[len("/static/") :])
         elif path == "/api/health":
             self._json(service.health())
         elif path == "/api/skills":
             self._json({"skills": service.skills()})
+        elif path == "/api/generate/health":
+            self._json(generator.health())
+        elif path == "/api/generate/library":
+            self._json({"rulebooks": generator.rulebooks()})
+        elif path.startswith("/api/generate/"):
+            job = generator.status(path[len("/api/generate/") :])
+            self._json(job if job else {"error": "no such job"}, 200 if job else 404)
         else:
             self._json({"error": f"no route for {path}"}, 404)
 
@@ -93,7 +113,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if path != "/api/plan":
+        if path not in ("/api/plan", "/api/generate"):
             self._json({"error": f"no route for {path}"}, 404)
             return
 
@@ -115,6 +135,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"kind": "error", "message": "expected a JSON object"}, 400)
             return
 
+        if path == "/api/generate":
+            generator: GeneratorService = self.server.generator  # type: ignore[attr-defined]
+            started = generator.start(
+                url=str(payload.get("url", "")),
+                transcript_text=str(payload.get("transcript", "")),
+            )
+            self._json(started, 400 if started.get("error") else 200)
+            return
+
         service: PlannerService = self.server.service  # type: ignore[attr-defined]
         use_llm = payload.get("use_llm")
         self._json(
@@ -126,10 +155,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(
-    service: PlannerService, host: str = "127.0.0.1", port: int = 8080, quiet: bool = False
+    service: PlannerService,
+    host: str = "127.0.0.1",
+    port: int = 8080,
+    quiet: bool = False,
+    generator: GeneratorService | None = None,
 ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), Handler)
     server.service = service  # type: ignore[attr-defined]
+    server.generator = generator or GeneratorService()  # type: ignore[attr-defined]
     server.quiet = quiet  # type: ignore[attr-defined]
     server.daemon_threads = True
     return server

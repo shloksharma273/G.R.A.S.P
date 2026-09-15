@@ -10,7 +10,7 @@ are indifferent to whether a rulebook was written by a person or generated here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from llm_disambiguator.provider import Provider, ServiceError
 
@@ -74,13 +74,28 @@ class GenerationResult:
         }
 
 
+#: Stages a caller can be told about as the pipeline moves through them. A UI
+#: waiting a minute or two on the extraction needs to say what it is waiting for,
+#: and only this function knows where those boundaries actually are.
+STAGE_EXTRACTING = "reconstructing the rulebook"
+STAGE_RENDERING = "rendering the markdown"
+STAGE_VALIDATING = "running the validation gate"
+
+
 def generate(
     transcript: Transcript,
     config: GeneratorConfig,
     provider: Provider | None = None,
     cache: PayloadCache | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> GenerationResult:
-    """Transcript in, validated rulebook out (FR-3 ... FR-7)."""
+    """Transcript in, validated rulebook out (FR-3 ... FR-7).
+
+    `on_stage` is told which stage is starting, so a caller that has to wait can
+    say what it is waiting for. It is optional and purely observational - nothing
+    about the result depends on it.
+    """
+    announce = on_stage if on_stage is not None else (lambda _stage: None)
     result = GenerationResult()
 
     bounded, was_truncated = truncate(transcript)
@@ -91,6 +106,7 @@ def generate(
     cache = cache if cache is not None else PayloadCache(config.cache_path, config.cache_enabled)
 
     # --- Stage 2: structured extraction ------------------------------------
+    announce(STAGE_EXTRACTING)
     try:
         extraction = extract(bounded, provider, config.llm.model, cache=cache)
     except NotProcedural as error:
@@ -123,9 +139,11 @@ def generate(
     result.rulebook = rulebook
 
     # --- Stage 3: deterministic rendering ----------------------------------
+    announce(STAGE_RENDERING)
     result.markdown = render(rulebook)
 
     # --- Stage 4: the validation gate --------------------------------------
+    announce(STAGE_VALIDATING)
     report = validate(rulebook, markdown=result.markdown)
     if extraction.multiple_tasks:
         # Section 10: several recipes in one video is out of scope. The first

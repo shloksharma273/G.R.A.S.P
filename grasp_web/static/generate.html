@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>G.R.A.S.P — generate a rulebook</title>
+  <meta name="description" content="Turn a captioned how-to video into a rulebook, gated by validation." />
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23044926'/><circle cx='16' cy='9' r='3.2' fill='%23b9ff38'/><circle cx='9' cy='22' r='3.2' fill='%23b9ff38'/><circle cx='23' cy='22' r='3.2' fill='%23b9ff38'/><path d='M16 12v4l-7 4M16 16l7 4' stroke='%23befe99' stroke-width='1.6' fill='none'/></svg>" />
+</head>
+<body>
+
+  <header>
+    <div class="wordmark">G.R.A.S.P</div>
+    <nav class="nav">
+      <a href="/">plan</a>
+      <a href="/generate" aria-current="page">generate</a>
+    </nav>
+    <div class="pills" id="pills">
+      <span class="pill">connecting<span class="dots"></span></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap">
+
+      <section class="welcome" id="welcome">
+        <h1>Turn a how-to video into a <em>rulebook</em>.</h1>
+        <p>
+          Fetching the captions is the easy part. Narration is chatty, skips the
+          obvious, and almost never states a precondition — nobody says the water
+          must boil before the pasta goes in. Reconstructing those preconditions is
+          the whole job, which is why every rulebook is put back through the bridge
+          and graded before it counts.
+        </p>
+
+        <form class="gen-form" id="form" autocomplete="off">
+          <div class="gen-row">
+            <input id="url" name="url" placeholder="https://youtu.be/… — a captioned how-to video"
+                   aria-label="Video link" />
+            <button class="go" type="submit" id="go">Generate</button>
+          </div>
+          <label class="disclosure" id="toggle-paste">▸ no captions? paste a transcript instead</label>
+          <textarea id="transcript" name="transcript" hidden
+                    placeholder="Paste the spoken words here, one cue per line or as prose."
+                    aria-label="Transcript"></textarea>
+        </form>
+
+        <div id="library-wrap" hidden>
+          <p style="margin:.2rem 0 .2rem; font-size:.8rem;">already generated</p>
+          <div class="library" id="library"></div>
+        </div>
+      </section>
+
+      <section id="stream"></section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="hint" style="max-width:62rem;margin:0 auto;">
+      Verdicts: <b>accept</b> passed every check · <b>flag</b> usable, wants a human eye ·
+      <b>reject</b> a cycle or a broken round-trip. Only an accept is ever ingested —
+      an inferred precondition that is wrong becomes a plan a robot would try to run.
+    </div>
+  </footer>
+
+  <script src="/static/generate.js"></script>
+</body>
+</html>

@@ -309,3 +309,216 @@ footer {
   ol.steps li { grid-template-columns: 2rem 1fr; padding: .55rem .8rem; }
   main { padding: 1rem; }
 }
+
+/* =========================================================== generator ==== */
+
+/* Nav between the two pages. Sits next to the wordmark so the header keeps
+   reading left-to-right: who we are, where you are, what you are connected to. */
+.nav { display: flex; gap: .15rem; }
+
+.nav a {
+  font-size: .78rem;
+  padding: .3rem .7rem;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  transition: color .12s, border-color .12s, background .12s;
+}
+.nav a:hover { color: var(--text); background: var(--surface-2); }
+.nav a[aria-current="page"] {
+  color: var(--lime);
+  border-color: rgba(185, 255, 56, .35);
+  background: rgba(185, 255, 56, .07);
+}
+
+/* ------------------------------------------------------------ the form --- */
+
+.gen-form { display: grid; gap: .7rem; margin-bottom: 1.6rem; }
+.gen-row { display: flex; gap: .6rem; }
+.gen-row input { flex: 1; }
+
+.gen-form input,
+.gen-form textarea {
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: .95rem;
+  padding: .7rem .9rem;
+  outline: none;
+  transition: border-color .12s, box-shadow .12s;
+}
+.gen-form textarea {
+  font-family: var(--mono);
+  font-size: .82rem;
+  min-height: 7rem;
+  resize: vertical;
+}
+.gen-form input::placeholder,
+.gen-form textarea::placeholder { color: var(--text-faint); }
+.gen-form input:focus,
+.gen-form textarea:focus {
+  border-color: var(--lime);
+  box-shadow: 0 0 0 3px rgba(185, 255, 56, .1);
+}
+
+.gen-form button.go {
+  background: var(--lime);
+  color: #0b1a06;
+  border: 0;
+  border-radius: var(--radius);
+  font-weight: 650;
+  font-size: .88rem;
+  padding: 0 1.35rem;
+  cursor: pointer;
+}
+.gen-form button.go:disabled { opacity: .4; cursor: default; }
+
+.disclosure {
+  font-size: .76rem;
+  color: var(--text-faint);
+  cursor: pointer;
+  user-select: none;
+  width: fit-content;
+}
+.disclosure:hover { color: var(--text-dim); }
+
+/* -------------------------------------------------------------- verdict -- */
+
+/* The verdict is the single most important thing on the page, so it gets the
+   colour and everything else stays quiet. */
+.verdict {
+  font-family: var(--mono);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: .25rem .7rem;
+  border-radius: 999px;
+  border: 1px solid;
+}
+.verdict.accept { color: var(--lime);  border-color: rgba(185, 255, 56, .45); background: rgba(185, 255, 56, .08); }
+.verdict.flag   { color: var(--amber); border-color: rgba(255, 209, 102, .45); background: rgba(255, 209, 102, .08); }
+.verdict.reject { color: #ff8c8c;      border-color: rgba(207, 46, 46, .5);    background: rgba(207, 46, 46, .09); }
+
+.card.gen-accept { border-color: rgba(185, 255, 56, .3); }
+.card.gen-flag   { border-color: rgba(255, 209, 102, .35); }
+.card.gen-reject { border-color: rgba(207, 46, 46, .4); }
+
+/* --------------------------------------------------------------- stats --- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: .1rem;
+  background: var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.stat { background: var(--surface); padding: .7rem .9rem; }
+.stat .v { font-family: var(--mono); font-size: 1.15rem; color: var(--text); }
+.stat .k { font-size: .68rem; color: var(--text-faint); letter-spacing: .04em; }
+.stat.hero .v { color: var(--lime); }
+.stat .note { font-size: .64rem; color: var(--text-faint); opacity: .8; }
+
+/* -------------------------------------------------------------- issues --- */
+
+.issues { padding: .3rem 0; }
+.issue {
+  display: grid;
+  grid-template-columns: 4.4rem 1fr;
+  gap: .7rem;
+  padding: .55rem 1.1rem;
+  border-bottom: 1px solid rgba(42, 55, 66, .5);
+  font-size: .86rem;
+}
+.issue:last-child { border-bottom: 0; }
+.issue .lvl {
+  font-family: var(--mono);
+  font-size: .64rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding-top: .18rem;
+}
+.issue.fatal .lvl { color: #ff8c8c; }
+.issue.warn  .lvl { color: var(--amber); }
+.issue code { font-family: var(--mono); font-size: .78rem; color: var(--mint); }
+.issue .detail { color: var(--text-dim); font-size: .82rem; }
+
+.clean { padding: .9rem 1.1rem; color: var(--mint); font-size: .86rem; }
+
+/* ------------------------------------------------------------ markdown --- */
+
+.md-head {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .6rem 1.1rem;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.md-head .t { font-size: .78rem; color: var(--text-dim); }
+.md-head .acts { margin-left: auto; display: flex; gap: .4rem; }
+
+.mini {
+  font-size: .72rem;
+  padding: .28rem .7rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--ink);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color .12s, color .12s;
+}
+.mini:hover { border-color: var(--lime); color: var(--lime); }
+
+pre.md {
+  margin: 0;
+  max-height: 26rem;
+  overflow: auto;
+  padding: 1rem 1.1rem;
+  font-family: var(--mono);
+  font-size: .78rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+pre.md .h { color: var(--lime); }
+pre.md .b { color: var(--mint); }
+
+/* --------------------------------------------------------------- stage --- */
+
+.stage {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: 1rem 1.1rem;
+  color: var(--text-dim);
+  font-size: .9rem;
+}
+.stage .spin {
+  width: .85rem; height: .85rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--lime);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  flex: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .stage .spin { animation-duration: 2.4s; } }
+
+.stage .elapsed { margin-left: auto; font-family: var(--mono); font-size: .74rem; color: var(--text-faint); }
+
+/* ------------------------------------------------------------- library --- */
+
+.library { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .4rem; }
+
+@media (max-width: 640px) {
+  .gen-row { flex-direction: column; }
+  .gen-form button.go { padding: .7rem; }
+  .issue { grid-template-columns: 1fr; gap: .15rem; }
+}

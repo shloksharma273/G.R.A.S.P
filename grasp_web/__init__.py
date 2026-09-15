@@ -10,6 +10,13 @@ nothing here writes.
 __version__ = "1.0.0"
 
 from .api import PlannerService  # noqa: E402
+from .generate import GeneratorService  # noqa: E402
 from .server import Handler, make_server  # noqa: E402
 
-__all__ = ["PlannerService", "make_server", "Handler", "__version__"]
+__all__ = [
+    "PlannerService",
+    "GeneratorService",
+    "make_server",
+    "Handler",
+    "__version__",
+]

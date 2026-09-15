@@ -14,7 +14,7 @@ upstream that can author the rulebooks themselves from video.
 | 4 · Normalize direction & order | settle head → tail, derive `precedes` | built (`direction_normalizer/`) |
 | 5 · Write | persist to the PlanGraph | built (`plangraph_writer/`) |
 | **Layer 2** · Planning | command → goal → subgraph → ordered `plan.json` | built (`layer2_planning/`) |
-| **UI** · Web front end | ask in a browser, read the plan | built (`grasp_web/`) |
+| **UI** · Web front end | ask in a browser; generate rulebooks from video | built (`grasp_web/`) |
 
 ---
 
@@ -1022,10 +1022,15 @@ CLI cannot drift apart in what they answer.
 
 | Route | Returns |
 | --- | --- |
-| `GET /` | the page |
+| `GET /` | the planning page |
+| `GET /generate` | the rulebook generator page |
 | `GET /api/health` | database, graph, skill count, retrieval method, phrasing |
 | `GET /api/skills` | every skill with its step count |
 | `POST /api/plan` | `{command, use_llm}` → a plan, a clarification, or a stated error |
+| `GET /api/generate/health` | model, strictness, whether captions can be fetched |
+| `GET /api/generate/library` | rulebooks already on disk |
+| `POST /api/generate` | `{url \| transcript}` → a job id |
+| `GET /api/generate/<job>` | that job's state, stage and result |
 
 **Standard library only.** Four JSON routes do not justify a web framework, and
 `requirements.txt` still lists one required package.
@@ -1046,6 +1051,30 @@ the CLI makes, only clickable.
 
 The **model phrasing** toggle is the honest demonstration: turn it off and the
 wording gets plainer while the order does not move at all.
+
+### The generator page
+
+`/generate` turns a captioned video into a rulebook in the same browser. Paste a
+link — or the transcript itself, if the video has no captions or
+`youtube-transcript-api` is not installed.
+
+Generation is slow: captions, then a minute or two of reconstruction. A
+synchronous request would leave the page spinning with nothing to say, so it runs
+as a **job** — the POST starts it and returns an id, and the page polls for the
+stage it has reached. Those stages come from `rulebook_generator.pipeline` itself
+via an `on_stage` callback, so the page names real boundaries rather than a
+progress bar invented to look busy.
+
+The result leads with the verdict, because that is the thing that matters:
+`accept` in lime, `flag_for_review` in amber, `reject` in red. Under it, the shape
+of what was extracted — primitives, states, objects, and the count of `requires`
+marked *mostly inferred*, since that is the part the transcript never stated. Then
+every validation issue with its code and detail, the plan the rulebook implies,
+and the markdown itself with copy and download.
+
+Download is a client-side blob, not a server write: the page should not need a
+write endpoint to hand you a file. Rulebooks already on disk appear as chips, so a
+demo can reopen one without re-running a two-minute generation.
 
 ### The palette
 
@@ -1161,9 +1190,10 @@ kg_read_harness/          Station 1 — Read
   cli.py        one-shot entry point
 grasp_web/                Web front end
   api.py        a thin shell over Layer 2; no planning logic
-  server.py     stdlib HTTP: four JSON routes plus the static page
+  generate.py   the generator half: jobs, stages, the library
+  server.py     stdlib HTTP: the JSON routes plus the static pages
   cli.py        entry point
-  static/       index.html · app.css · app.js
+  static/       index.html · generate.html · app.css · app.js · generate.js
 
 rulebook_generator/       Station 0 — Rulebook Generator
   transcript.py captions -> clean prose; optional YouTube fetch  (FR-2)
