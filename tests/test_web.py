@@ -62,7 +62,7 @@ class ServiceTests(unittest.TestCase):
     def test_the_plan_carries_the_contract_fields(self):
         step = self.service.plan("cook a burger")["steps"][0]
         self.assertEqual(
-            set(step), {"order", "action", "description", "requires", "produces", "uses"}
+            set(step), {"order", "action", "description", "requires", "produces", "uses", "interface"}
         )
 
     def test_an_unresolvable_command_clarifies(self):

@@ -3,14 +3,16 @@
 "steps[] order is authoritative and graph-derived; description is the only
 LLM-authored field." Everything in this module exists to make that sentence
 checkable rather than aspirational: `description` is the single field a model
-touches, and `order`, `action`, `requires`, `produces` and `uses` all come
-straight off the graph.
+touches, and `order`, `action`, `requires`, `produces`, `uses` and `interface`
+all come straight off the graph.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+
+from rulebook_generator.parse import execution_of, sentences
 
 CONTRACT_VERSION = "1.0"
 
@@ -23,6 +25,10 @@ class Step:
     requires: list[str] = field(default_factory=list)
     produces: list[str] = field(default_factory=list)
     uses: list[str] = field(default_factory=list)
+    #: How to run the step - `{kind, name, type}`, e.g. a topic to publish to.
+    #: None when the rulebook did not say, which is every rulebook built from a
+    #: video or a manual.
+    interface: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +38,7 @@ class Step:
             "requires": list(self.requires),
             "produces": list(self.produces),
             "uses": list(self.uses),
+            "interface": dict(self.interface) if self.interface else None,
         }
 
 
@@ -74,6 +81,19 @@ class Clarification:
         }
 
 
+def interface_of(evidence: str) -> dict[str, str] | None:
+    """The execution handle stated in a step's decomposition evidence, if any.
+
+    Read with the rulebook parser's own sentence matcher, so the sentence the
+    renderer wrote and the one read back here cannot drift.
+    """
+    for sentence in sentences(evidence or ""):
+        handle = execution_of(sentence)
+        if handle is not None:
+            return handle.to_dict()
+    return None
+
+
 def build_plan(
     command: str,
     goal: str,
@@ -94,6 +114,7 @@ def build_plan(
                 requires=list(subgraph.requires.get(action, ())),
                 produces=list(subgraph.produces.get(action, ())),
                 uses=list(subgraph.uses.get(action, ())),
+                interface=interface_of(subgraph.evidence.get(action, "")),
             )
             for position, action in enumerate(steps, start=1)
         ],

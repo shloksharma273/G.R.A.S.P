@@ -10,12 +10,13 @@ import unittest
 from pathlib import Path
 
 from layer2_planning import load_planner_config, plan_command
+from layer2_planning.retrieve import load_skills
 from plangraph_writer.config import load_writer_config
 from plangraph_writer.schema import Schema
 from rulebook_generator import parse_file, render
 from rulebook_generator.direct import find_rulebooks, ingest_all, ingest_rulebook
 from rulebook_generator.direct_cli import EXIT_NOTHING_WRITTEN, run
-from rulebook_generator.schema import Primitive, Rulebook
+from rulebook_generator.schema import Interface, Primitive, Rulebook
 from rulebook_generator.validate import to_stamped_edges
 
 from .corpus_fixture import ENV
@@ -155,6 +156,62 @@ class IngestTests(unittest.TestCase):
         ingest_rulebook(self.path, self.db, writer())
         for name in FOREIGN_COLLECTIONS:
             self.assertEqual(len(self.db.collection(name).documents), 1)
+
+
+GOTO = Rulebook(
+    skill="go_to_location",
+    title="Go To Location",
+    objects=["robot"],
+    states=["robot_localized", "robot_at_goal"],
+    primitives=[
+        Primitive(
+            "set_initial_pose", "The robot tells AMCL where it is.", [], ["robot_localized"], ["robot"],
+            interface=Interface("topic", "/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped"),
+        ),
+        Primitive(
+            "navigate_to_goal", "The robot drives to the goal.", ["robot_localized"], ["robot_at_goal"],
+            ["robot"], interface=Interface("action", "/navigate_to_pose", "nav2_msgs/action/NavigateToPose"),
+        ),
+    ],
+)
+
+
+class InterfaceTests(unittest.TestCase):
+    """A step's execution handle survives the ingest and reaches the plan."""
+
+    def setUp(self):
+        self.db = make_db()
+
+    def ingest(self, rulebook):
+        path = write_rulebook(rulebook)
+        self.addCleanup(os.unlink, path)
+        ingest_rulebook(path, self.db, writer())
+
+    def test_each_step_says_how_to_run_it(self):
+        self.ingest(GOTO)
+        answer = plan_command("go to location", self.db, load_planner_config(ENV, use_llm=False))
+        self.assertEqual(
+            [step.interface for step in answer.steps],
+            [
+                {"kind": "topic", "name": "/initialpose",
+                 "type": "geometry_msgs/msg/PoseWithCovarianceStamped"},
+                {"kind": "action", "name": "/navigate_to_pose",
+                 "type": "nav2_msgs/action/NavigateToPose"},
+            ],
+        )
+
+    def test_a_rulebook_without_handles_plans_without_them(self):
+        self.ingest(TEA)
+        answer = plan_command("make me tea", self.db, load_planner_config(ENV, use_llm=False))
+        self.assertEqual([step.interface for step in answer.steps], [None, None])
+
+    def test_the_handle_stays_out_of_the_skill_match_text(self):
+        """It says how a step runs, not what the task is - it would only dilute the match."""
+        self.ingest(GOTO)
+        (skill,) = load_skills(self.db, SCHEMA)
+        self.assertIn("navigate_to_goal", skill["description"])
+        self.assertNotIn("/navigate_to_pose", skill["description"])
+        self.assertNotIn("executed by", skill["description"])
 
 
 class MultipleRulebookTests(unittest.TestCase):

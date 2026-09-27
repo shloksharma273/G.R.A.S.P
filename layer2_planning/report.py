@@ -42,6 +42,9 @@ def print_plan(config: PlannerConfig, plan: Plan, stream: IO[str] | None = None)
             print(f"      {g['turn']} produces: {', '.join(step.produces)}", file=stream)
         if step.uses:
             print(f"      {g['turn']} uses:     {', '.join(step.uses)}", file=stream)
+        if step.interface:
+            call = step.interface["name"] + (f" ({step.interface['type']})" if step.interface.get("type") else "")
+            print(f"      {g['turn']} {step.interface['kind'] + ':':<10}{call}", file=stream)
 
     if plan.meta.get("warning"):
         print("", file=stream)

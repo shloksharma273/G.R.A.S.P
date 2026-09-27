@@ -9,6 +9,7 @@ before anything is touched.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from typing import Any, Iterable
 
@@ -174,6 +175,10 @@ def _disagrees(row: dict[str, Any], name: str, entity_type: str) -> bool:
     return False
 
 
+#: The rulebook's "It is executed by ... `name` of type `type`." sentence.
+_EXECUTION_SENTENCE = re.compile(r"\s*\bIt is executed by [^`]*`[^`]*`(?:\s+of type\s+`[^`]*`)?\.?")
+
+
 def _skill_description(name: str, texts: list[str]) -> str:
     """The text the vector index embeds for goal resolution (FR-6).
 
@@ -182,6 +187,9 @@ def _skill_description(name: str, texts: list[str]) -> str:
     order so the same input embeds the same string.
     """
     readable = name.replace("_", " ").strip()
+    # A step's execution handle rides on the same evidence, but it says how a
+    # step runs, not what the task is; embedded here it only dilutes the match.
+    texts = [_EXECUTION_SENTENCE.sub("", text) for text in texts]
     unique = list(dict.fromkeys(text.strip() for text in texts if text.strip()))
     return " ".join([readable, *unique])
 

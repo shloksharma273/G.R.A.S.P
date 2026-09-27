@@ -33,7 +33,7 @@ from rule_preclassifier.model import Orientation
 
 from .parse import normalize as normalize_name
 from .parse import parse_text
-from .render import render
+from .render import render, render_interface
 from .schema import ACCEPT, FLAG, REJECT, Rulebook
 
 #: Issues that make the rulebook unusable rather than merely suspect.
@@ -111,13 +111,13 @@ def to_bundles(rulebook: Rulebook) -> list[Bundle]:
         )
 
     for primitive in rulebook.primitives:
-        add(
-            rulebook.skill,
-            "SKILL",
-            primitive.name,
-            "PRIMITIVE",
-            f"The skill {rulebook.skill} is composed of the primitive action {primitive.name}.",
-        )
+        # The handle rides on the decomposition edge: it describes how the step
+        # is run, not a state or an object, so no other edge can carry it, and
+        # Layer 2 already reads this edge's evidence for every step it plans.
+        description = f"The skill {rulebook.skill} is composed of the primitive action {primitive.name}."
+        if primitive.interface is not None:
+            description += " " + render_interface(primitive.interface)
+        add(rulebook.skill, "SKILL", primitive.name, "PRIMITIVE", description)
     for primitive in rulebook.primitives:
         for state in primitive.produces:
             add(primitive.name, "PRIMITIVE", state, "STATE", f"After this action, {state} is true.")

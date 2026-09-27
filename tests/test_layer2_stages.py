@@ -424,7 +424,7 @@ class CliTests(unittest.TestCase):
         run("cook a burger", output_format="json", use_llm=False, stdout=out, db=self.db)
         payload = json.loads(out.getvalue())
         self.assertEqual(set(payload), {"goal", "command", "steps", "meta"})
-        self.assertEqual(set(payload["steps"][0]), {"order", "action", "description", "requires", "produces", "uses"})
+        self.assertEqual(set(payload["steps"][0]), {"order", "action", "description", "requires", "produces", "uses", "interface"})
 
     def test_threshold_override(self):
         out = io.StringIO()

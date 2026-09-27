@@ -222,6 +222,11 @@ ol.steps li:last-child { border-bottom: 0; }
 .tag.uses { color: var(--text-dim); border-color: var(--line); }
 .tag i { font-style: normal; opacity: .55; margin-right: .3rem; }
 
+/* The step's execution handle: what to publish to, call, or send a goal to. */
+.call { font-family: var(--mono); font-size: .76rem; margin-top: .35rem; color: var(--lime); }
+.call i { font-style: normal; color: var(--text-dim); margin-right: .45rem; }
+.call .type { color: var(--text-dim); margin-left: .45rem; }
+
 /* -------------------------------------------------------- clarification -- */
 
 .card.clarify { border-color: rgba(255, 209, 102, .35); }

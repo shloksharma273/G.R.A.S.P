@@ -96,6 +96,8 @@ function renderSuggestions(skills) {
 }
 
 const readable = (name) => String(name).replace(/_/g, " ").toLowerCase();
+// How a step's interface kind is invoked (mirrors CALL_PHRASES in rulebook_generator/schema.py).
+const CALL_VERBS = { topic: "publish", service: "call", action: "send goal", api: "call" };
 
 /* Display names for the retrieval method. The API keeps reporting the real
  * method - and plan.json's meta.match_method still records it - so what a plan
@@ -185,6 +187,11 @@ function renderPlan(plan) {
       ...step.produces.map((s) => `<span class="tag prod"><i>produces</i>${esc(readable(s))}</span>`),
       ...step.uses.map((s) => `<span class="tag uses"><i>uses</i>${esc(readable(s))}</span>`),
     ].join("");
+    const call = step.interface
+      ? `<div class="call"><i>${esc(CALL_VERBS[step.interface.kind] || "call")}</i><code>${esc(step.interface.name)}</code>${
+          step.interface.type ? `<span class="type">${esc(step.interface.type)}</span>` : ""
+        }</div>`
+      : "";
 
     list.appendChild(
       el(`<li>
@@ -192,6 +199,7 @@ function renderPlan(plan) {
         <div class="desc">
           <div class="action">${esc(step.action)}</div>
           ${esc(step.description)}
+          ${call}
         </div>
         ${tags ? `<div class="tags">${tags}</div>` : ""}
       </li>`)
