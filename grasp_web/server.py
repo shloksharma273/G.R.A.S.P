@@ -8,7 +8,9 @@ ArangoDB traversal and at most one model call, and those are independent.
 Routes:
 
     GET  /                       the planning page
+    GET  /projects               the project list: discover, build, view, ask
     GET  /generate               the rulebook generator page
+    GET  /repo                   the repository generator page
     GET  /static/<file>          their assets
     GET  /api/health             what the planner is connected to
     GET  /api/skills             what it can plan
@@ -17,6 +19,11 @@ Routes:
     GET  /api/generate/library   rulebooks already on disk
     POST /api/generate           start a generation, get a job id
     GET  /api/generate/<job>     poll that job
+    POST /api/repo/tree          a docs repo in, its procedure pages out
+    POST /api/repo/generate      chosen pages in, a generation job out
+    GET  /api/projects           every project in the database and its stage
+    POST /api/projects/build     build one project's PlanGraph, get a job id
+    GET  /api/projects/build/<j> poll that build
 
 Generation is slow enough to need a job: the POST starts one and returns
 immediately, and the page polls for the stage it has reached.
@@ -35,8 +42,10 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .api import PlannerService
-from .generate import GeneratorService
+from .api import PlannerRegistry, PlannerService
+from .builder import BuildService
+from .generate import STAGE_READING_REPO, GeneratorService
+from .repo import RepoBrowser, RepoError
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -72,6 +81,23 @@ class Handler(BaseHTTPRequestHandler):
             "application/json; charset=utf-8",
         )
 
+    def _query(self) -> dict[str, str]:
+        from urllib.parse import parse_qs, urlparse
+
+        raw = parse_qs(urlparse(self.path).query)
+        return {key: values[0] for key, values in raw.items() if values}
+
+    def _planner(self, project: str = "") -> PlannerService:
+        """The planner for one project, or the server's default.
+
+        A registry is optional so a server built the old way - one service, one
+        project - still works exactly as it did.
+        """
+        registry: PlannerRegistry | None = getattr(self.server, "registry", None)
+        if project and registry is not None:
+            return registry.for_project(project)
+        return self.server.service  # type: ignore[attr-defined]
+
     def _static(self, name: str) -> None:
         # Resolve inside STATIC so a crafted path cannot escape the directory.
         target = (STATIC / name).resolve()
@@ -89,16 +115,28 @@ class Handler(BaseHTTPRequestHandler):
 
         generator: GeneratorService = self.server.generator  # type: ignore[attr-defined]
 
+        query = self._query()
+        builder: BuildService = self.server.builder  # type: ignore[attr-defined]
+
         if path == "/":
             self._static("index.html")
+        elif path == "/projects":
+            self._static("projects.html")
         elif path == "/generate":
             self._static("generate.html")
+        elif path == "/repo":
+            self._static("repo.html")
         elif path.startswith("/static/"):
             self._static(path[len("/static/") :])
         elif path == "/api/health":
-            self._json(service.health())
+            self._json(self._planner(query.get("project", "")).health())
         elif path == "/api/skills":
-            self._json({"skills": service.skills()})
+            self._json({"skills": self._planner(query.get("project", "")).skills()})
+        elif path == "/api/projects":
+            self._json(builder.projects())
+        elif path.startswith("/api/projects/build/"):
+            job = builder.status(path[len("/api/projects/build/") :])
+            self._json(job if job else {"error": "no such build"}, 200 if job else 404)
         elif path == "/api/generate/health":
             self._json(generator.health())
         elif path == "/api/generate/library":
@@ -113,7 +151,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if path not in ("/api/plan", "/api/generate"):
+        if path not in (
+            "/api/plan",
+            "/api/generate",
+            "/api/repo/tree",
+            "/api/repo/generate",
+            "/api/projects/build",
+        ):
             self._json({"error": f"no route for {path}"}, 404)
             return
 
@@ -144,7 +188,25 @@ class Handler(BaseHTTPRequestHandler):
             self._json(started, 400 if started.get("error") else 200)
             return
 
-        service: PlannerService = self.server.service  # type: ignore[attr-defined]
+        if path.startswith("/api/repo/"):
+            self._repo(path, payload)
+            return
+
+        if path == "/api/projects/build":
+            builder: BuildService = self.server.builder  # type: ignore[attr-defined]
+            started = builder.start(
+                project=str(payload.get("project", "")),
+                dry_run=bool(payload.get("dry_run")),
+            )
+            # A build rewrites exactly what a cached planner holds, so the cache
+            # for that project is dropped the moment one is accepted.
+            registry: PlannerRegistry | None = getattr(self.server, "registry", None)
+            if registry is not None and not started.get("error"):
+                registry.invalidate(str(payload.get("project", "")))
+            self._json(started, 400 if started.get("error") else 200)
+            return
+
+        service = self._planner(str(payload.get("project", "")))
         use_llm = payload.get("use_llm")
         self._json(
             service.plan(
@@ -153,6 +215,47 @@ class Handler(BaseHTTPRequestHandler):
             )
         )
 
+    def _repo(self, path: str, payload: dict[str, Any]) -> None:
+        """The two repository routes, sharing one error translation.
+
+        A `RepoError` here is an ordinary outcome - a typo, a private repo, a used
+        up rate limit - so it is reported as the actionable message it already
+        carries rather than as a server fault.
+        """
+        browser: RepoBrowser = self.server.browser  # type: ignore[attr-defined]
+        url = str(payload.get("url", ""))
+
+        try:
+            mode = str(payload.get("mode", "docs"))
+            if path == "/api/repo/tree":
+                self._json(browser.tree(url, mode=mode))
+                return
+
+            paths = payload.get("paths")
+            if not isinstance(paths, list):
+                self._json({"error": "expected a list of paths"}, 400)
+                return
+            chosen = [str(p) for p in paths]
+            ref = str(payload.get("ref", ""))
+
+            # Fail fast on an unreadable request, before a job exists to report
+            # it: the browser should be told "no files chosen" by the POST, not a
+            # second later by a job that errored.
+            reference = browser.parse_check(url, chosen)
+
+            generator: GeneratorService = self.server.generator  # type: ignore[attr-defined]
+            started = generator.start(
+                prepare=lambda: browser.document(url, chosen, ref=ref, mode=mode),
+                prepare_stage=STAGE_READING_REPO,
+                source_label=f"{reference} \u2014 {len(chosen)} file(s)",
+                register="code" if mode == "code" else "manual",
+            )
+            self._json(started, 400 if started.get("error") else 200)
+        except RepoError as error:
+            self._json({"error": error.message, "hint": error.hint}, 400)
+        except Exception as error:  # a bad repo must not take the server down
+            self._json({"error": f"{error.__class__.__name__}: {error}"}, 500)
+
 
 def make_server(
     service: PlannerService,
@@ -160,10 +263,16 @@ def make_server(
     port: int = 8080,
     quiet: bool = False,
     generator: GeneratorService | None = None,
+    browser: RepoBrowser | None = None,
+    builder: BuildService | None = None,
+    registry: PlannerRegistry | None = None,
 ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), Handler)
     server.service = service  # type: ignore[attr-defined]
+    server.registry = registry  # type: ignore[attr-defined]
+    server.builder = builder or BuildService()  # type: ignore[attr-defined]
     server.generator = generator or GeneratorService()  # type: ignore[attr-defined]
+    server.browser = browser or RepoBrowser()  # type: ignore[attr-defined]
     server.quiet = quiet  # type: ignore[attr-defined]
     server.daemon_threads = True
     return server

@@ -173,6 +173,7 @@ def validate(rulebook: Rulebook, markdown: str | None = None) -> ValidationRepor
         return report
 
     _check_orphans(rulebook, report)
+    _check_interfaces(rulebook, report)
     _check_goal_state(rulebook, report)
     _check_size(rulebook, report)
 
@@ -216,6 +217,17 @@ def _check_round_trip(rulebook: Rulebook, markdown: str | None, report: Validati
                 "round_trip_mismatch",
                 f"{primitive.name}: effects do not survive rendering "
                 f"({sorted(primitive.produces)} -> {sorted(back.produces)})",
+            )
+            return
+        here = primitive.interface.to_dict() if primitive.interface else None
+        there = back.interface.to_dict() if back.interface else None
+        if here != there:
+            # A handle that does not survive rendering is worse than no handle:
+            # the plan would name a service that is not the one the source said.
+            report.add(
+                "round_trip_mismatch",
+                f"{primitive.name}: the execution handle does not survive rendering "
+                f"({here} -> {there})",
             )
             return
 
@@ -319,6 +331,44 @@ def _bridge(rulebook: Rulebook, report: ValidationReport) -> Any:
             + ", ".join(sorted(unordered)),
         )
     return result
+
+
+def _check_interfaces(rulebook: Rulebook, report: ValidationReport) -> None:
+    """In an executable rulebook, every step needs a handle.
+
+    Only checked when the rulebook claims to be one - that is, when some primitive
+    carries an interface. A rulebook reconstructed from a video describes what a
+    person does and has no handles at all, and demanding them there would flag
+    every rulebook the generator has ever produced.
+
+    A flag rather than a fatal: the precondition graph is still correct and still
+    plannable. What it cannot do is *run*, and the step that cannot run should be
+    named before a plan is handed to something that will try.
+    """
+    with_handle = [p for p in rulebook.primitives if p.interface is not None]
+    if not with_handle:
+        return
+
+    missing = [p.name for p in rulebook.primitives if p.interface is None]
+    if missing:
+        report.add(
+            "missing_interface",
+            f"{len(with_handle)} of {len(rulebook.primitives)} steps say how to "
+            "invoke them, so this is meant to be executable - but these say nothing, "
+            "and a plan cannot run them: " + ", ".join(sorted(missing)),
+        )
+
+    seen: dict[str, str] = {}
+    for primitive in with_handle:
+        key = f"{primitive.interface.kind}:{primitive.interface.name}"
+        if key in seen:
+            report.add(
+                "duplicate_interface",
+                f"{primitive.name} and {seen[key]} are both invoked through "
+                f"{primitive.interface.name}, so the plan has two steps that do the "
+                "same call. One of them is probably wrong.",
+            )
+        seen[key] = primitive.name
 
 
 def _check_orphans(rulebook: Rulebook, report: ValidationReport) -> None:

@@ -28,6 +28,7 @@ from rulebook_generator.cache import PayloadCache
 from rulebook_generator.cli import EXIT_FLAGGED, EXIT_REJECTED, run
 from rulebook_generator.config import load_generator_config
 from rulebook_generator.extract import build_system_prompt, parse_reply, validate_shape
+from rulebook_generator.schema import Interface
 from rulebook_generator.ingest import ingest, write_rulebook
 from rulebook_generator.report import dump_json, print_report
 from rulebook_generator.transcript import (
@@ -652,6 +653,148 @@ class ManualSourceTests(unittest.TestCase):
         system, user = provider.prompts[0]
         self.assertIn("MOSTLY STATED", system)
         self.assertIn("DOCUMENTATION", user)
+
+
+class ExecutableRulebookTests(unittest.TestCase):
+    """A rulebook from source carries the handle a program calls to run each step."""
+
+    def book(self, *interfaces):
+        """A two-step rulebook, with whichever handles the test gives it."""
+        payload = {
+            "skill": "drive_to_dock",
+            "title": "Drive To Dock",
+            "objects": ["motors", "base"],
+            "states": ["motors_enabled", "base_at_dock"],
+            "primitives": [
+                {"name": "enable_motors", "narration": "The robot enables the motors.",
+                 "requires": [], "produces": ["motors_enabled"], "uses": ["motors"]},
+                {"name": "drive_to_dock", "narration": "The robot drives to the dock.",
+                 "requires": ["motors_enabled"], "produces": ["base_at_dock"], "uses": ["base"]},
+            ],
+            "ordering": ["The motors must be enabled before the base drives."],
+        }
+        for primitive, interface in zip(payload["primitives"], interfaces):
+            if interface is not None:
+                primitive["interface"] = interface
+        return Rulebook.from_dict(payload)
+
+    SERVICE = {"kind": "service", "name": "/motor_controller/enable", "type": "std_srvs/srv/Trigger"}
+    ACTION = {"kind": "action", "name": "/navigate_to_pose", "type": "nav2_msgs/action/NavigateToPose"}
+
+    # --- the handle must survive the markdown -------------------------------
+
+    def test_a_handle_survives_the_round_trip(self):
+        book = self.book(self.SERVICE, self.ACTION)
+        back = parse_text(render(book))
+        self.assertEqual(
+            [p.interface.to_dict() for p in back.primitives],
+            [self.SERVICE, self.ACTION],
+        )
+
+    def test_every_kind_survives(self):
+        for kind, name in (
+            ("service", "/a/b"), ("topic", "/cmd_vel"),
+            ("action", "/navigate_to_pose"), ("api", "/v1/move"),
+        ):
+            with self.subTest(kind=kind):
+                book = self.book({"kind": kind, "name": name, "type": "pkg/msg/Thing"})
+                back = parse_text(render(book))
+                self.assertEqual(back.primitives[0].interface.kind, kind)
+                self.assertEqual(back.primitives[0].interface.name, name)
+
+    def test_a_handle_with_no_type_survives(self):
+        book = self.book({"kind": "service", "name": "/dashboard_client/play"})
+        back = parse_text(render(book))
+        self.assertEqual(back.primitives[0].interface.name, "/dashboard_client/play")
+        self.assertEqual(back.primitives[0].interface.type, "")
+
+    def test_a_ros_name_is_never_snake_cased(self):
+        """Everything else is normalized; a normalized ROS name is not callable."""
+        book = self.book(self.SERVICE)
+        self.assertEqual(book.primitives[0].interface.name, "/motor_controller/enable")
+        self.assertIn("`/motor_controller/enable`", render(book))
+
+    def test_a_long_handle_is_not_broken_across_a_wrapped_line(self):
+        long_name = "/scaled_joint_trajectory_controller/follow_joint_trajectory"
+        book = self.book({"kind": "action", "name": long_name,
+                          "type": "control_msgs/action/FollowJointTrajectory"})
+        self.assertIn(long_name, render(book))
+        self.assertEqual(parse_text(render(book)).primitives[0].interface.name, long_name)
+
+    def test_the_handle_does_not_leak_into_the_narration(self):
+        book = self.book(self.SERVICE)
+        back = parse_text(render(book))
+        self.assertNotIn("executed by", back.primitives[0].narration)
+
+    # --- the gate -----------------------------------------------------------
+
+    def test_a_fully_handled_rulebook_is_accepted(self):
+        report = validate(self.book(self.SERVICE, self.ACTION))
+        self.assertEqual(report.verdict, ACCEPT, [i.code for i in report.issues])
+
+    def test_a_step_with_no_handle_is_flagged(self):
+        """The step a plan would not be able to run has to be named."""
+        report = validate(self.book(self.SERVICE, None))
+        self.assertIn("missing_interface", [i.code for i in report.issues])
+        self.assertIn("drive_to_dock", " ".join(i.detail for i in report.issues))
+
+    def test_a_rulebook_with_no_handles_at_all_is_not_flagged(self):
+        """A video or a manual has none, and demanding them there flags everything."""
+        report = validate(self.book(None, None))
+        self.assertNotIn("missing_interface", [i.code for i in report.issues])
+
+    def test_two_steps_on_the_same_handle_are_flagged(self):
+        report = validate(self.book(self.SERVICE, dict(self.SERVICE)))
+        self.assertIn("duplicate_interface", [i.code for i in report.issues])
+
+    def test_a_handle_lost_in_rendering_is_fatal(self):
+        """Worse than no handle: the plan would name a call the source did not."""
+        book = self.book(self.SERVICE, self.ACTION)
+        # The handle is swapped rather than the sentence reworded: the sentence is
+        # line-wrapped and a phrase may straddle a newline, but a backticked name
+        # is one token and never is.
+        broken = render(book).replace("`/motor_controller/enable`", "`/wrong/handle`")
+        self.assertIn("/wrong/handle", broken)
+        report = validate(book, markdown=broken)
+        self.assertEqual(report.verdict, REJECT)
+        self.assertIn("round_trip_mismatch", [i.code for i in report.issues])
+
+    # --- the prompt ---------------------------------------------------------
+
+    def test_the_code_prompt_demands_verbatim_handles(self):
+        prompt = build_system_prompt(code=True)
+        self.assertIn("COPY INTERFACE NAMES VERBATIM", prompt)
+        self.assertIn("NEVER INVENT AN INTERFACE", prompt)
+        self.assertIn("GROUNDED", prompt)
+
+    def test_the_code_prompt_carries_its_own_worked_example(self):
+        prompt = build_system_prompt(code=True)
+        self.assertIn("drive_to_charging_dock", prompt)
+        self.assertNotIn("place_pan", prompt)
+        self.assertNotIn("run_centrifuge_cycle", prompt)
+
+    def test_only_the_code_schema_mentions_an_interface(self):
+        """Asking a video prompt for a handle invites the model to invent one."""
+        self.assertIn('"interface"', build_system_prompt(code=True))
+        self.assertNotIn('"interface"', build_system_prompt())
+        self.assertNotIn('"interface"', build_system_prompt(manual=True))
+
+    def test_the_three_registers_do_not_share_a_cache_entry(self):
+        directory = tempfile.mkdtemp()
+        cache = PayloadCache(os.path.join(directory, "cache.json"))
+        text = Transcript(text="the robot enables the motors", video_id="v", source="code")
+        provider = fake_llm.FakeProvider(fake_llm.config(), responder(CHAI))
+        extract(text, provider, "m", cache=cache, code=True)
+        extract(text, provider, "m", cache=cache, code=False, manual=True)
+        extract(text, provider, "m", cache=cache, code=False, manual=False)
+        self.assertEqual(len(cache), 3)
+
+    def test_the_register_follows_the_transcript(self):
+        provider = fake_llm.FakeProvider(fake_llm.config(), responder(CHAI))
+        extract(Transcript(text="create_service", video_id="v", source="code"), provider, "m")
+        system, user = provider.prompts[0]
+        self.assertIn("COPY INTERFACE NAMES VERBATIM", system)
+        self.assertIn("SOURCE", user)
 
 
 class GeneratedCorpusTests(unittest.TestCase):

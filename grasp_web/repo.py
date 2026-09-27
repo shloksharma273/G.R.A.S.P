@@ -28,7 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from kg_read_harness.errors import HarnessError
@@ -38,8 +38,23 @@ RAW_HOST = "raw.githubusercontent.com"
 TIMEOUT_SECONDS = 30.0
 
 #: Markdown is what documentation repos are written in. `.mdx` covers the
-#: Docusaurus/VitePress sites most robotics projects publish from.
-DOC_SUFFIXES = (".md", ".mdx")
+#: Docusaurus/VitePress sites most robotics projects publish from, and `.rst` the
+#: Sphinx ones - which is what most ROS packages use.
+DOC_SUFFIXES = (".md", ".mdx", ".rst")
+
+#: Code mode additionally reads the files that *declare the interfaces*: the
+#: sources that advertise a service or a publisher, the interface definitions
+#: themselves, and the launch and config files that name the controllers.
+CODE_SUFFIXES = (
+    ".py", ".cpp", ".hpp", ".h", ".c", ".cc",
+    ".srv", ".action", ".msg", ".idl",
+    ".yaml", ".yml", ".xml", ".launch",
+)
+
+#: The two things this page can read out of a repository.
+MODE_DOCS = "docs"
+MODE_CODE = "code"
+MODES = (MODE_DOCS, MODE_CODE)
 
 #: Paths that are never a procedure: machinery, templates, and the changelog.
 SKIP_PATTERNS = (
@@ -56,6 +71,17 @@ TRANSLATION = re.compile(
 
 #: Words that mark a page as describing something *done*, in the order a robotics
 #: manual tends to use them. Purely a ranking hint — see the module docstring.
+#: Paths that tend to *declare* an interface rather than merely use one. A ROS
+#: package puts its service and action definitions under these directories, and
+#: names the node that advertises them after what it drives. A ranking hint, like
+#: PROCEDURE_WORDS - it reorders the list, it never ticks a box.
+INTERFACE_WORDS = (
+    "srv", "action", "msg", "service", "services", "topic", "topics",
+    "controller", "controllers", "driver", "hardware_interface", "dashboard",
+    "node", "launch", "api", "client", "server", "bringup", "moveit",
+    "gripper", "trajectory", "command", "commands", "io", "gpio",
+)
+
 PROCEDURE_WORDS = (
     "arm", "disarm", "takeoff", "take_off", "land", "landing", "return", "rtl",
     "launch", "mission", "flight_mode", "flight_modes", "procedure", "checklist",
@@ -103,12 +129,15 @@ class RepoRef:
         return f"https://{RAW_HOST}/{self.owner}/{self.repo}/{ref}/{quoted}"
 
 
-_GITHUB_URL = re.compile(
-    r"^(?:https?://)?(?:www\.)?github\.com/"
+#: One pattern for every spelling: a full URL, a tree/blob URL, a bare
+#: `owner/repo`, and a bare slug that carries a branch and subdirectory. The
+#: host prefix is optional but, when present, must be github.com - a URL on any
+#: other host fails to match and is refused below rather than fetched.
+_REPO = re.compile(
+    r"^(?:(?:https?://)?(?:www\.)?github\.com/)?"
     r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?"
     r"(?:/(?:tree|blob)/(?P<ref>[^/]+)(?:/(?P<path>.*))?)?/?$"
 )
-_BARE = re.compile(r"^(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 
 
 def parse_repo(url: str) -> RepoRef:
@@ -121,16 +150,15 @@ def parse_repo(url: str) -> RepoRef:
             "or just PX4/PX4-user_guide.",
         )
 
-    for pattern in (_GITHUB_URL, _BARE):
-        found = pattern.match(candidate)
-        if found:
-            parts = found.groupdict()
-            return RepoRef(
-                owner=parts["owner"],
-                repo=parts["repo"],
-                ref=(parts.get("ref") or "") if pattern is _GITHUB_URL else "",
-                path=((parts.get("path") or "").strip("/")) if pattern is _GITHUB_URL else "",
-            )
+    found = _REPO.match(candidate)
+    if found:
+        parts = found.groupdict()
+        return RepoRef(
+            owner=parts["owner"],
+            repo=parts["repo"],
+            ref=parts.get("ref") or "",
+            path=(parts.get("path") or "").strip("/"),
+        )
 
     raise RepoError(
         f"{candidate!r} is not a GitHub repository.",
@@ -202,18 +230,39 @@ def default_branch(ref: RepoRef) -> str:
     return branch
 
 
-def is_doc(path: str) -> bool:
-    if not path.lower().endswith(DOC_SUFFIXES):
+def suffixes_for(mode: str) -> tuple[str, ...]:
+    return DOC_SUFFIXES + CODE_SUFFIXES if mode == MODE_CODE else DOC_SUFFIXES
+
+
+def is_doc(path: str, mode: str = MODE_DOCS) -> bool:
+    """Whether this file is worth offering, for the kind of reading being done."""
+    if not path.lower().endswith(suffixes_for(mode)):
         return False
     if TRANSLATION.search(path):
+        return False
+    if mode == MODE_CODE and re.search(r"(^|/)(test|tests)/", path):
+        # A test names the interfaces it exercises, which reads exactly like a
+        # declaration and is not one. Offering them buries the real sources.
         return False
     return not any(pattern.search(path) for pattern in SKIP_PATTERNS)
 
 
-def score(path: str) -> int:
-    """How procedure-shaped a path looks. A hint for ordering, nothing more."""
+def score(path: str, mode: str = MODE_DOCS) -> int:
+    """How relevant a path looks, for the kind of reading being done.
+
+    In docs mode that means procedure-shaped. In code mode it means likely to
+    *declare an interface* - a `.srv` file, a controller, the node that advertises
+    the services. Both are hints for ordering, nothing more.
+    """
     haystack = re.sub(r"[^a-z0-9]+", "_", path.lower())
     total = 0
+    if mode == MODE_CODE:
+        for word in INTERFACE_WORDS:
+            if f"_{word}_" in f"_{haystack}_":
+                total += 3
+        # An interface definition is the most direct statement there is.
+        if path.lower().endswith((".srv", ".action", ".msg")):
+            total += 6
     for word in PROCEDURE_WORDS:
         if word in haystack:
             # A hit in the filename means more than one in a parent directory:
@@ -245,15 +294,21 @@ class RepoBrowser:
 
     # --- listing ------------------------------------------------------------
 
-    def tree(self, url: str) -> dict[str, Any]:
-        """Every documentation file in the repo, best candidates first."""
+    def tree(self, url: str, mode: str = MODE_DOCS) -> dict[str, Any]:
+        """Every readable file in the repo, best candidates first.
+
+        `mode` decides what "readable" means: prose in docs mode, prose plus the
+        sources and interface definitions in code mode. It is part of the cache
+        key, because the two modes list different files for the same repo.
+        """
+        mode = mode if mode in MODES else MODE_DOCS
         ref = parse_repo(url)
-        key = (ref.owner.lower(), ref.repo.lower(), ref.path.lower())
+        key = (ref.owner.lower(), ref.repo.lower(), ref.path.lower(), mode)
 
         with self._lock:
             hit = self._cache.get(key)
             if hit and (time.monotonic() - hit.when) < TREE_CACHE_SECONDS:
-                return self._payload(ref, hit, cached=True)
+                return self._payload(ref, hit, cached=True, mode=mode)
 
         branch = ref.ref or default_branch(ref)
         payload = _json(
@@ -272,7 +327,7 @@ class RepoBrowser:
             path = str(entry.get("path") or "")
             if prefix and not path.startswith(prefix):
                 continue
-            if not is_doc(path):
+            if not is_doc(path, mode):
                 continue
             files.append(
                 {
@@ -280,13 +335,13 @@ class RepoBrowser:
                     "name": path.rsplit("/", 1)[-1],
                     "dir": path.rsplit("/", 1)[0] if "/" in path else "",
                     "size": int(entry.get("size") or 0),
-                    "score": score(path),
+                    "score": score(path, mode),
                 }
             )
 
         if not files:
             raise RepoError(
-                f"no markdown documentation found in {ref.slug}"
+                f"no {'source or documentation' if mode == MODE_CODE else 'markdown documentation'} found in {ref.slug}"
                 + (f" under {ref.path}/" if ref.path else "")
                 + ".",
                 "point at a docs repository, or at the subdirectory holding the "
@@ -302,24 +357,47 @@ class RepoBrowser:
         )
         with self._lock:
             self._cache[key] = cached
-        return self._payload(ref, cached, cached=False)
+        return self._payload(ref, cached, cached=False, mode=mode)
 
     @staticmethod
-    def _payload(ref: RepoRef, entry: _Cached, cached: bool) -> dict[str, Any]:
+    def _payload(ref: RepoRef, entry: _Cached, cached: bool, mode: str = MODE_DOCS) -> dict[str, Any]:
         return {
             "repo": ref.slug,
             "url": ref.url,
             "ref": entry.ref,
             "path": ref.path,
+            "mode": mode,
             "files": entry.files,
             "truncated": entry.truncated,
             "from_cache": cached,
             "max_selected": MAX_SELECTED,
         }
 
+    def parse_check(self, url: str, paths: list[str]) -> str:
+        """Validate a generate request before a job is made for it.
+
+        The slow part runs inside the job, but a typo in the URL or an empty
+        selection is knowable now - and a caller that hears it from the POST can
+        act on it, where one that hears it from a job a second later has already
+        drawn a spinner.
+        """
+        reference = parse_repo(url)
+        chosen = [p for p in dict.fromkeys(paths or []) if p]
+        if not chosen:
+            raise RepoError("no pages chosen.", "tick at least one page to read.")
+        if len(chosen) > MAX_SELECTED:
+            raise RepoError(
+                f"{len(chosen)} pages chosen; the limit is {MAX_SELECTED}.",
+                "a rulebook describes one procedure. Narrow the selection to the "
+                "pages that describe it.",
+            )
+        return reference.slug
+
     # --- fetching -----------------------------------------------------------
 
-    def document(self, url: str, paths: list[str], ref: str = "") -> dict[str, Any]:
+    def document(
+        self, url: str, paths: list[str], ref: str = "", mode: str = MODE_DOCS
+    ) -> dict[str, Any]:
         """The chosen files, concatenated into one document for the generator.
 
         Each file keeps its path as a heading. That is not decoration: it is the
@@ -343,8 +421,8 @@ class RepoBrowser:
         total = 0
 
         for path in chosen:
-            if not is_doc(path):
-                raise RepoError(f"{path} is not a documentation file.", "")
+            if not is_doc(path, mode if mode in MODES else MODE_DOCS):
+                raise RepoError(f"{path} is not a readable file in {mode} mode.", "")
             body = _get(reference.raw_url(path, branch), accept="text/plain").decode(
                 "utf-8", "replace"
             )
@@ -357,6 +435,7 @@ class RepoBrowser:
         return {
             "repo": reference.slug,
             "ref": branch,
+            "mode": mode,
             "paths": used,
             "skipped": [p for p in chosen if p not in used],
             "source_url": f"https://github.com/{reference.slug}/tree/{branch}",

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>G.R.A.S.P — generate from a docs repo</title>
+  <meta name="description" content="Turn a robotics documentation repository into a rulebook, gated by validation." />
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23044926'/><circle cx='16' cy='9' r='3.2' fill='%23b9ff38'/><circle cx='9' cy='22' r='3.2' fill='%23b9ff38'/><circle cx='23' cy='22' r='3.2' fill='%23b9ff38'/><path d='M16 12v4l-7 4M16 16l7 4' stroke='%23befe99' stroke-width='1.6' fill='none'/></svg>" />
+</head>
+<body>
+
+  <header>
+    <div class="wordmark">G.R.A.S.P</div>
+    <nav class="nav">
+      <a href="/projects">projects</a>
+      <a href="/">plan</a>
+      <a href="/generate">video</a>
+      <a href="/repo" aria-current="page">repo</a>
+    </nav>
+    <div class="pills" id="pills">
+      <span class="pill">connecting<span class="dots"></span></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap">
+
+      <section class="welcome" id="welcome">
+        <h1>Turn a robot's <em>manual</em> into a rulebook.</h1>
+        <p>
+          A manual is the opposite of a how-to video. Narration skips the preconditions;
+          documentation is largely made of them — the GPS lock, the battery minimum, the
+          safety switch. Point it at <b>source code</b> instead and every step carries the
+          handle a program calls to run it, so the plan says <em>which service</em>, not just
+          what to do. Either way the gate has the last word.
+        </p>
+
+        <form class="gen-form" id="form" autocomplete="off">
+          <div class="gen-row">
+            <input id="repo" name="repo" placeholder="PX4/PX4-user_guide — a public GitHub docs repo"
+                   aria-label="Repository" />
+            <button class="go" type="button" id="browse">Browse</button>
+          </div>
+          <div class="modes" role="radiogroup" aria-label="What to read">
+            <label class="mode on">
+              <input type="radio" name="mode" value="docs" checked />
+              <span><b>documentation</b> what a person does — prose, procedures</span>
+            </label>
+            <label class="mode">
+              <input type="radio" name="mode" value="code" />
+              <span><b>source code</b> what a program calls — services, topics, actions</span>
+            </label>
+          </div>
+          <div class="examples" id="examples"></div>
+        </form>
+
+        <div id="picker" hidden>
+          <div class="picker-head">
+            <span class="t" id="picker-title">pages</span>
+            <input id="filter" class="filter" placeholder="filter by path…" aria-label="Filter pages" />
+            <span class="picked" id="picked">0 chosen</span>
+            <button class="go small" type="button" id="go" disabled>Generate</button>
+          </div>
+          <p class="picker-note" id="picker-note"></p>
+          <div class="files" id="files" role="group" aria-label="Documentation pages"></div>
+        </div>
+      </section>
+
+      <section id="stream"></section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="hint" style="max-width:62rem;margin:0 auto;">
+      One rulebook describes <b>one procedure</b> — pick the pages that describe it, not the
+      whole guide. Verdicts: <b>accept</b> passed every check · <b>flag</b> wants a human eye ·
+      <b>reject</b> a cycle or a broken round-trip.
+    </div>
+  </footer>
+
+  <script src="/static/rulebook.js"></script>
+  <script src="/static/repo.js"></script>
+</body>
+</html>

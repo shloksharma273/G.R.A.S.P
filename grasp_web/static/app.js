@@ -30,9 +30,15 @@ const el = (html) => {
 
 // -------------------------------------------------------------- boot --------
 
+/* Which project this page is planning against. Chosen on /projects and carried
+   in the query string, so the link is shareable and a reload keeps the graph. */
+const PROJECT = new URLSearchParams(location.search).get("project") || "";
+const scoped = (path) =>
+  PROJECT ? `${path}${path.includes("?") ? "&" : "?"}project=${encodeURIComponent(PROJECT)}` : path;
+
 async function boot() {
   try {
-    const health = await (await fetch("/api/health")).json();
+    const health = await (await fetch(scoped("/api/health"))).json();
     renderPills(health);
     llmToggle.checked = health.phrasing === "model";
     llmToggle.disabled = !health.model;
@@ -45,7 +51,7 @@ async function boot() {
   }
 
   try {
-    const { skills } = await (await fetch("/api/skills")).json();
+    const { skills } = await (await fetch(scoped("/api/skills"))).json();
     renderSuggestions(skills);
   } catch (error) {
     $("suggestions").innerHTML = "";
@@ -55,6 +61,9 @@ async function boot() {
 function renderPills(health) {
   const vector = health.vector_index;
   $("pills").innerHTML = [
+    PROJECT
+      ? `<a class="pill" href="/projects" title="Planning against this project. Click to choose another.">project <b>${esc(PROJECT)}</b></a>`
+      : `<a class="pill" href="/projects" title="Choose a project to plan against.">project <b>default</b></a>`,
     `<span class="pill">db <b>${esc(health.database)}</b></span>`,
     `<span class="pill">graph <b>${esc(health.graph)}</b></span>`,
     `<span class="pill">skills <b>${health.skills}</b></span>`,
@@ -122,7 +131,7 @@ async function ask(command) {
     const response = await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ command, use_llm: llmToggle.checked }),
+      body: JSON.stringify({ command, use_llm: llmToggle.checked, project: PROJECT }),
     });
     payload = await response.json();
   } catch (error) {

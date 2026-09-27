@@ -124,10 +124,12 @@ def clean(raw: str, caption_artifacts: bool = True) -> str:
     return re.sub(r"\s+", " ", " ".join(words)).strip()
 
 
-def from_file(path: str | Path, url: str = "", manual: bool = False) -> Transcript:
+def from_file(
+    path: str | Path, url: str = "", manual: bool = False, code: bool = False
+) -> Transcript:
     """Captions from a local file — plain text, or one cue per line."""
     raw = Path(path).read_text(encoding="utf-8")
-    text = clean(raw, caption_artifacts=not manual)
+    text = clean(raw, caption_artifacts=not (manual or code))
     if not text:
         raise NoCaptions(
             f"{path} contains no usable caption text.",
@@ -136,7 +138,7 @@ def from_file(path: str | Path, url: str = "", manual: bool = False) -> Transcri
     return Transcript(
         text=text,
         video_id=url or str(path),
-        source="manual" if manual else "file",
+        source="code" if code else "manual" if manual else "file",
         url=url,
     )
 

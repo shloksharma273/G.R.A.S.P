@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .schema import Primitive, Rulebook
+from .schema import CALL_PHRASES, Interface, Primitive, Rulebook
 
 #: Sentences that state an effect.
 EFFECT = re.compile(
@@ -27,6 +27,37 @@ PRECONDITION = re.compile(
     r"\b(requires that|requires|must (?:be|already|first|have)|must\b.*\bbefore\b|before it can)",
     re.IGNORECASE,
 )
+
+#: The sentence that carries an execution handle. The verb phrases come from
+#: `CALL_PHRASES`, which the renderer writes from - one table, so the sentence
+#: written and the sentence read back cannot drift.
+EXECUTION = re.compile(
+    r"\bexecuted by (" + "|".join(re.escape(p) for p in CALL_PHRASES.values()) + r")\s+"
+    r"`?([^\s`]+?)`?"
+    r"(?:\s+of type\s+`?([^\s`]+?)`?)?"
+    r"\s*\.?$",
+    re.IGNORECASE,
+)
+
+#: Verb phrase back to the kind it came from.
+_KIND_BY_PHRASE = {phrase.lower(): kind for kind, phrase in CALL_PHRASES.items()}
+
+
+def execution_of(sentence: str) -> Interface | None:
+    """The handle a sentence names, or None if it names none."""
+    found = EXECUTION.search(sentence.strip())
+    if not found:
+        return None
+    phrase, name, kind_type = found.group(1), found.group(2), found.group(3)
+    name = (name or "").strip().strip("`.,")
+    if not name:
+        return None
+    return Interface(
+        kind=_KIND_BY_PHRASE.get(phrase.lower(), "service"),
+        name=name,
+        type=(kind_type or "").strip().strip("`.,"),
+    )
+
 
 #: Words that carry no identity, so two phrases differing only in these match.
 ARTICLES = frozenset(
@@ -119,6 +150,14 @@ def parse_text(text: str, source_url: str = "") -> Rulebook:
 
         narration: list[str] = []
         for sentence in sentences(body):
+            # Checked first: an execution sentence is neither a precondition nor
+            # an effect, and left to the fallback it would land in the narration
+            # and the handle would be lost on the way back out.
+            handle = execution_of(sentence)
+            if handle is not None:
+                primitive.interface = handle
+                continue
+
             precondition = bool(PRECONDITION.search(sentence))
             effect = bool(EFFECT.search(sentence))
 

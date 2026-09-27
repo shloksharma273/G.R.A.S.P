@@ -23,6 +23,59 @@ FLAG = "flag_for_review"
 REJECT = "reject"
 
 
+#: How a primitive is actually invoked on the robot. A ROS 2 driver exposes a
+#: service, a topic, or an action; an HTTP stack exposes an endpoint.
+CALL_KINDS = ("service", "topic", "action", "api")
+
+#: The verb each kind is executed with, used by the renderer and the parser. They
+#: read this one table so the sentence they write and the sentence they read back
+#: cannot drift apart.
+CALL_PHRASES = {
+    "service": "calling the service",
+    "topic": "publishing to the topic",
+    "action": "sending a goal to the action",
+    "api": "calling the endpoint",
+}
+
+
+@dataclass
+class Interface:
+    """The concrete handle a planner needs in order to *run* a step.
+
+    Deliberately not an object and not a state. An object is a thing acted on and
+    a state is a condition of the world; this is neither. It is the address of the
+    action, and without it a plan can say what to do and not how to do it.
+
+    The names are kept verbatim - `/dashboard_client/brake_release`, not
+    `dashboard_client_brake_release`. Everything else in a rulebook is normalized
+    to snake_case, but a ROS name that has been normalized is no longer callable,
+    which defeats the entire point of recording it.
+    """
+
+    kind: str
+    name: str
+    type: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": self.kind, "name": self.name, "type": self.type}
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> "Interface | None":
+        if not isinstance(payload, dict):
+            return None
+        kind = str(payload.get("kind", "")).strip().lower()
+        name = str(payload.get("name", "")).strip().strip("`")
+        if not name:
+            return None
+        if kind not in CALL_KINDS:
+            kind = "service"
+        return cls(kind=kind, name=name, type=str(payload.get("type", "")).strip().strip("`"))
+
+    @property
+    def phrase(self) -> str:
+        return CALL_PHRASES.get(self.kind, CALL_PHRASES["service"])
+
+
 @dataclass
 class Primitive:
     """One atomic robot action, with its preconditions and effects made explicit."""
@@ -32,15 +85,22 @@ class Primitive:
     requires: list[str] = field(default_factory=list)
     produces: list[str] = field(default_factory=list)
     uses: list[str] = field(default_factory=list)
+    #: How to actually invoke it, when the source said. None for a rulebook
+    #: reconstructed from a video or a manual, which describe what a person does
+    #: rather than what a program calls.
+    interface: Interface | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "name": self.name,
             "narration": self.narration,
             "requires": list(self.requires),
             "produces": list(self.produces),
             "uses": list(self.uses),
         }
+        if self.interface is not None:
+            payload["interface"] = self.interface.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Primitive":
@@ -50,6 +110,7 @@ class Primitive:
             requires=_names(payload.get("requires")),
             produces=_names(payload.get("produces")),
             uses=_names(payload.get("uses")),
+            interface=Interface.from_dict(payload.get("interface")),
         )
 
 

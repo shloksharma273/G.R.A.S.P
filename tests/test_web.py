@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 
 from grasp_web import PlannerService, make_server
+from grasp_web.cli import serving_env
 from layer2_planning import load_planner_config
 
 from .corpus_fixture import ENV, corpus_db
@@ -246,6 +247,29 @@ class PageTests(unittest.TestCase):
     def test_the_page_explains_where_the_order_comes_from(self):
         html = (self.static / "index.html").read_text(encoding="utf-8")
         self.assertIn("precondition graph", html)
+
+
+class ProjectFlagTests(unittest.TestCase):
+    """--project points the server at another PlanGraph without editing the env."""
+
+    BASE = {"PROJECT_NAME": "kitchen", "ARANGO_DB": "test_shlok"}
+
+    def test_no_flag_leaves_the_environment_alone(self):
+        self.assertIs(serving_env(None, self.BASE), self.BASE)
+
+    def test_the_project_becomes_the_graph(self):
+        env = serving_env("px4Planner", self.BASE)
+        self.assertEqual(env["PROJECT_NAME"], "px4Planner")
+        self.assertEqual(env["ARANGO_DB"], "test_shlok")
+
+    def test_it_overrides_an_explicit_prefix(self):
+        """Otherwise the flag is silently ignored wherever PLANGRAPH_PREFIX is set."""
+        env = serving_env("px4Planner", {**self.BASE, "PLANGRAPH_PREFIX": "kitchen"})
+        self.assertEqual(env["PLANGRAPH_PREFIX"], "px4Planner")
+
+    def test_the_prefix_reaches_the_planner_config(self):
+        config = load_planner_config(serving_env("px4Planner", {**ENV}), use_llm=False)
+        self.assertEqual(config.schema.graph_name, "px4Planner_PlanGraph")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ upstream that can author the rulebooks themselves from video.
 | 4 · Normalize direction & order | settle head → tail, derive `precedes` | built (`direction_normalizer/`) |
 | 5 · Write | persist to the PlanGraph | built (`plangraph_writer/`) |
 | **Layer 2** · Planning | command → goal → subgraph → ordered `plan.json` | built (`layer2_planning/`) |
-| **UI** · Web front end | ask in a browser; generate rulebooks from video | built (`grasp_web/`) |
+| **UI** · Web front end | discover projects, build their PlanGraph, ask in a browser | built (`grasp_web/`) |
 
 ---
 
@@ -1049,8 +1049,10 @@ CLI cannot drift apart in what they answer.
 
 | Route | Returns |
 | --- | --- |
-| `GET /` | the planning page |
-| `GET /generate` | the rulebook generator page |
+| `GET /projects` | the project list: discover, build, view, ask |
+| `GET /` | the planning page (`?project=` selects the graph) |
+| `GET /generate` | the rulebook generator page (video) |
+| `GET /repo` | the rulebook generator page (docs repo) |
 | `GET /api/health` | database, graph, skill count, retrieval method, phrasing |
 | `GET /api/skills` | every skill with its step count |
 | `POST /api/plan` | `{command, use_llm}` → a plan, a clarification, or a stated error |
@@ -1058,9 +1060,14 @@ CLI cannot drift apart in what they answer.
 | `GET /api/generate/library` | rulebooks already on disk |
 | `POST /api/generate` | `{url \| transcript}` → a job id |
 | `GET /api/generate/<job>` | that job's state, stage and result |
+| `POST /api/repo/tree` | `{url}` → the repo's documentation pages, ranked |
+| `POST /api/repo/generate` | `{url, ref, paths}` → a job id |
+| `GET /api/projects` | every project in the database and the stage it has reached |
+| `POST /api/projects/build` | `{project}` → a build job id (**the one route that writes**) |
+| `GET /api/projects/build/<job>` | that build's state, stage and station reports |
 
-**Standard library only.** Four JSON routes do not justify a web framework, and
-`requirements.txt` still lists one required package.
+**Standard library only.** A handful of JSON routes do not justify a web
+framework, and `requirements.txt` still lists one required package.
 
 ### What the page shows
 
@@ -1102,6 +1109,173 @@ and the markdown itself with copy and download.
 Download is a client-side blob, not a server write: the page should not need a
 write endpoint to hand you a file. Rulebooks already on disk appear as chips, so a
 demo can reopen one without re-running a two-minute generation.
+
+### The repository page
+
+`/repo` is the same generator pointed at a **robotics documentation repo** instead
+of a video. Paste `PX4/PX4-user_guide`, pick the pages that describe one procedure,
+and the manual-mode pipeline does the rest. It shares the verdict rendering with
+`/generate` — both load `static/rulebook.js` — so the two pages cannot drift apart
+in how they report a gate result.
+
+The extra step over the video page is the **picking**, and it is the point. A guide
+holds hundreds of pages and a rulebook describes one procedure, so the page lists
+what the repo has, ranked by how procedure-shaped each path looks, with a filter
+and a cap of twelve. The ranking is a hint and is labelled one: it reorders the
+list, it never ticks a box. Which pages describe the procedure you mean is a
+question you have a much better answer to than a keyword score does.
+
+Only GitHub's API and raw hosts are ever fetched. That is a deliberate limit: the
+server is handed a URL by whoever opens the page, and a fetcher that takes any URL
+is an SSRF hole pointed at whatever the host can reach. Set `GITHUB_TOKEN` to lift
+the unauthenticated rate limit from 60 requests an hour to 5,000.
+
+**It reports what became of your selection.** Four PX4 pages — arming, takeoff,
+return, landing — produce a rulebook for arming alone: the model judges the rest a
+different procedure, and the gate raises nothing, because "covers less than you
+selected" is not a defect in the rulebook. It is still the thing you need to know,
+so the page names the pages no step was drawn from. A page counts as used only when
+every word of some primitive's name appears in it — the gate's own grounding check
+is looser on purpose, and a one-word rule would call every page used, since
+"vehicle" is on every page of a drone manual.
+
+### Code mode: a rulebook you can execute
+
+The repo page reads a repository in one of two registers, chosen before the
+listing:
+
+| mode | reads | produces |
+| --- | --- | --- |
+| **documentation** | `.md` `.mdx` `.rst` | what a person does |
+| **source code** | that, plus `.py` `.cpp` `.hpp` `.srv` `.action` `.msg` `.yaml` `.launch` | what a **program calls** |
+
+In code mode every primitive carries an **execution handle** — the concrete thing
+to invoke, with its name copied verbatim and its message type:
+
+```
+**play_external_control_program** — The robot starts the loaded External Control
+program so that the driver takes over control of the arm. It is executed by
+calling the service `/dashboard_client/play` of type `std_srvs/srv/Trigger`.
+This action requires that program loaded is already true as a precondition.
+After this action, program running is true.
+```
+
+The handle is a first-class field on the primitive (`kind`, `name`, `type`), not
+a note in the prose. Three rules make it trustworthy:
+
+- **Names are never normalized.** Every other name in a rulebook is folded to
+  snake_case; a ROS name that has been folded is no longer callable, so
+  `/dashboard_client/play` is kept exactly as written — and long handles are
+  protected from line wrapping, because a handle broken across a line is not one.
+- **Invented handles are worse than absent ones.** The prompt's second rule is
+  "never invent an interface" — a guessed service name is a call that fails at
+  runtime, where a missing one fails honestly at review.
+- **The gate enforces the round trip.** `parse(render(x))` must recover the handle
+  too; a handle that does not survive rendering is fatal, because the plan would
+  then name a call the source never did.
+
+Two checks come with it. `missing_interface` flags the steps a plan could not run,
+but only in a rulebook that has handles at all — a rulebook from a video describes
+what a person does and has none, and demanding them there would flag every
+rulebook the generator has ever produced. `duplicate_interface` flags two steps
+that resolve to the same call, which usually means one of them is wrong.
+
+### What it does on a real driver
+
+Pointed at `UniversalRobots/Universal_Robots_ROS2_Driver`, three usage pages:
+
+```
+verdict  flag_for_review
+skill    startup_ur_driver_move_robot (9 primitives)
+issues   orphan_precondition · missing_interface · duplicate_interface · multiple_tasks
+
+load_external_control_program  service  /dashboard_client/load_program          ur_dashboard_msgs/srv/Load
+play_external_control_program  service  /dashboard_client/play                  std_srvs/srv/Trigger
+switch_controllers             service  /controller_manager/switch_controller   controller_manager_msgs/srv/SwitchController
+execute_joint_trajectory       action   .../follow_joint_trajectory             control_msgs/action/FollowJointTrajectory
+launch_driver                  —        no interface — a plan cannot run this step
+```
+
+Both new checks earn their keep on the first real run. `launch_driver`,
+`verify_calibration` and `list_controllers` are things an operator types, not
+things a program calls, so they are named as unrunnable rather than passed off as
+steps. And `play_external_control_program` and `resume_program_after_interruption`
+both resolve to `/dashboard_client/play` — one call, two steps.
+
+Feeding it the whole dashboard service catalogue instead is the failure worth
+knowing about: all 18 services come back with correct handles, and the gate
+**rejects** the result on a cycle between `stop_program` and `power_off_motors`.
+A catalogue is not a task, and the same discipline applies as everywhere else here
+— pick the files that describe one procedure.
+
+### The projects page
+
+`/projects` is the entry point, and it is the whole flow in one screen:
+
+```
+corpus graph  ->  knowledge graph  ->  PlanGraph  ->  ask for a plan
+  AutoGraph         AutoGraph          this page      this page
+```
+
+You build the first two in AutoGraph. The moment a project has a knowledge graph
+it appears here with a **Build PlanGraph** button; when the build finishes it
+offers **View in ArangoDB** — a deep link into Arango's own graph viewer — and
+**Ask for a plan**, which opens the planning page scoped to that project.
+
+**Discovery needs no new convention.** AutoGraph and the bridge already name their
+graphs after the stage, so listing the named graphs *is* the state machine:
+
+| graph | built by | means |
+| --- | --- | --- |
+| `{project}_CorpusGraph` | AutoGraph | the corpus graph exists |
+| `{project}_kg` | AutoGraph | the knowledge graph exists |
+| `{project}_PlanGraph` | this page | it can be planned against |
+
+A project with only a corpus is listed as *waiting*, not hidden — an empty screen
+is a bad way to find out you built the wrong thing.
+
+### It checks the ontology before offering the button
+
+A knowledge graph can exist and still hold nothing the bridge can plan, and both
+failure modes are live in `test_shlok` today. One project is an insurance graph
+whose entities are `insurance_claim` and `adjuster`. Another names its types in
+the **plural** — `skills`, `primitives` — which `canonical_type` does not resolve,
+because the ontology and its synonym table are singular. Neither can produce a
+PlanGraph, so neither gets a Build button; both get the reason and the types that
+were actually found.
+
+### Building is the one thing in this UI that writes
+
+Everything else — listing, planning, viewing — is read-only, and Layer 2 is
+read-only by contract. A build is the exception, so it is guarded:
+
+* **confirmed first**, naming the collections it will write and, on a rebuild, the
+  scopes it will delete and recreate — Station 5's scoped write purges before it
+  writes;
+* **one at a time per project**, because two concurrent scoped writes would
+  interleave a purge with a write;
+* **re-checked server-side** against the live state, so a stale page cannot
+  authorise a build the database no longer supports.
+
+It runs the five stations in one process and reports each as it lands:
+
+```
+✓ reading the knowledge graph      35 relationship bundle(s) from 35 edge(s)
+✓ typing the relationships         14 typed by rule, 21 need a model
+✓ resolving requires vs produces   21 settled by the lexical pre-pass
+✓ deriving the ordering            35 edge(s) oriented, 11 ordering(s) derived
+✓ writing the PlanGraph            wrote 1 skill scope(s) into roboticsPlanner_PlanGraph
+```
+
+The third line is worth its own note. Station 3 is the paid station, so the cost
+is reported — but split by where each verdict actually came from. On that build the
+lexical pre-pass settles all 21 and the model is never called, and reporting "21
+settled" beside a model name would imply a request that never happened.
+
+`grasp_web/bridge.py` runs the stations and knows nothing about threads or HTTP;
+`builder.py` runs it as a polled job. Same split as `generate.py` against
+`rulebook_generator`, for the same reason: no pipeline logic in the server, so the
+UI and the CLIs cannot disagree about what a build did.
 
 ### The palette
 

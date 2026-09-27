@@ -522,3 +522,324 @@ pre.md .b { color: var(--mint); }
   .gen-form button.go { padding: .7rem; }
   .issue { grid-template-columns: 1fr; gap: .15rem; }
 }
+
+/* ---------------------------------------------------------- the picker --- */
+
+/* A guide has hundreds of pages and a rulebook describes one procedure, so this
+   list exists to be narrowed. The ranking hint is quiet on purpose: it reorders,
+   it does not choose, and it should not look like it has decided anything. */
+
+.examples { display: flex; flex-wrap: wrap; gap: .5rem; }
+
+.picker-head {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+  padding: .6rem .9rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 0;
+}
+.picker-head .t { font-family: var(--mono); font-size: .78rem; color: var(--mint); }
+
+.filter {
+  flex: 1;
+  min-width: 8rem;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: .8rem;
+  padding: .35rem .6rem;
+  outline: none;
+}
+.filter:focus { border-color: var(--lime); }
+.filter::placeholder { color: var(--text-faint); }
+
+.picked { font-family: var(--mono); font-size: .74rem; color: var(--text-faint); }
+.picked.over { color: var(--amber); }
+
+.gen-form button.go.small,
+.picker-head button.go {
+  background: var(--lime);
+  color: #0b1a06;
+  border: 0;
+  border-radius: 6px;
+  font-weight: 650;
+  font-size: .78rem;
+  padding: .38rem .9rem;
+  cursor: pointer;
+}
+.picker-head button.go:disabled { opacity: .35; cursor: default; }
+
+.picker-note {
+  margin: 0;
+  padding: .45rem .9rem;
+  font-size: .74rem;
+  color: var(--text-faint);
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+
+.files {
+  max-height: 22rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--surface);
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .4rem .9rem;
+  border-bottom: 1px solid rgba(42, 55, 66, .5);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: .76rem;
+  color: var(--text-dim);
+}
+.file:last-child { border-bottom: 0; }
+.file:hover { background: var(--surface-2); }
+.file.on { background: rgba(185, 255, 56, .06); color: var(--text); }
+.file input { accent-color: var(--lime); cursor: pointer; flex: none; }
+.file .p { flex: 1; word-break: break-all; }
+.file .d { color: var(--text-faint); }
+.file .s { color: var(--text-faint); font-size: .7rem; flex: none; }
+
+.likely {
+  font-size: .62rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--mint);
+  border: 1px solid rgba(190, 254, 153, .28);
+  border-radius: 999px;
+  padding: .06rem .45rem;
+  flex: none;
+}
+
+.empty { padding: .9rem; font-size: .78rem; color: var(--text-faint); text-align: center; }
+
+.chosen-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .3rem;
+  margin: -.4rem 0 .7rem 1.1rem;
+}
+.chosen-paths code {
+  font-family: var(--mono);
+  font-size: .68rem;
+  color: var(--text-faint);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: .1rem .4rem;
+}
+
+@media (max-width: 640px) {
+  .picker-head { gap: .45rem; }
+  .filter { min-width: 6rem; }
+}
+
+/* ------------------------------------------------------- the projects --- */
+
+/* One card per project, and the card's job is to answer "what can I do with
+   this one". The stage dots carry that at a glance; the lime is spent only on
+   the action that is actually available. */
+
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.2rem;
+}
+.pipeline li {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .76rem;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .25rem .75rem .25rem .3rem;
+}
+.pipeline li em {
+  font-style: normal;
+  color: var(--text-faint);
+  font-size: .68rem;
+}
+.pipeline .n {
+  display: inline-grid;
+  place-items: center;
+  width: 1.15rem; height: 1.15rem;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: .64rem;
+}
+
+.card.project { margin-bottom: 1rem; }
+.card.project.plan { border-color: rgba(185, 255, 56, .28); }
+.card.project.kg { border-color: rgba(255, 209, 102, .3); }
+
+.verdict.plan   { color: var(--lime);  border-color: rgba(185, 255, 56, .45); background: rgba(185, 255, 56, .08); }
+.verdict.kg     { color: var(--amber); border-color: rgba(255, 209, 102, .45); background: rgba(255, 209, 102, .08); }
+.verdict.corpus { color: var(--text-dim); border-color: var(--line); }
+.verdict.empty  { color: var(--text-faint); border-color: var(--line); }
+
+.steps-row { padding: .55rem 1.1rem 0; }
+.stages { display: flex; flex-wrap: wrap; gap: .9rem; }
+.stage-dot {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  font-size: .72rem;
+  color: var(--text-faint);
+}
+.stage-dot i { font-style: normal; font-size: .6rem; }
+.stage-dot.on { color: var(--mint); }
+
+.project-body { padding: .7rem 1.1rem 1rem; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.actions .go.small {
+  display: inline-block;
+  text-decoration: none;
+  line-height: 1.5;
+}
+.note-inline { font-size: .74rem; color: var(--amber); }
+
+.blocked {
+  flex-basis: 100%;
+  font-size: .78rem;
+  color: var(--text-dim);
+  border-left: 2px solid rgba(255, 209, 102, .4);
+  padding: .3rem 0 .3rem .7rem;
+}
+.scopes { flex-basis: 100%; font-size: .72rem; color: var(--text-faint); margin-top: .2rem; }
+.scopes code {
+  font-family: var(--mono);
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: .05rem .35rem;
+  margin-right: .25rem;
+}
+
+/* ----------------------------------------------------- build progress --- */
+
+.stations { padding: .2rem 0; }
+.station {
+  display: grid;
+  grid-template-columns: 1.2rem 14rem 1fr;
+  gap: .5rem;
+  align-items: baseline;
+  padding: .35rem 1.1rem;
+  font-size: .8rem;
+  border-bottom: 1px solid rgba(42, 55, 66, .4);
+}
+.station:last-child { border-bottom: 0; }
+.station .tick { color: var(--mint); font-size: .72rem; }
+.station .s-name { color: var(--text); }
+.station .s-detail { color: var(--text-dim); font-size: .76rem; }
+
+/* ------------------------------------------------------------ confirm --- */
+
+/* Building writes. The dialog exists so that is a decision, not a reflex. */
+/* `hidden` is a UA-stylesheet rule, and ANY author `display` beats it - so a
+   .modal with `display: grid` is visible however hidden the attribute says it
+   is. This pairing is what actually closes the dialog. */
+.modal[hidden] { display: none; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 16, .72);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  z-index: 50;
+}
+.modal-box {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-width: 34rem;
+  width: 100%;
+  padding: 1.2rem 1.3rem;
+}
+.modal-box h2 { margin: 0 0 .7rem; font-size: 1.05rem; }
+.modal-box p { margin: 0 0 .7rem; font-size: .84rem; color: var(--text-dim); }
+.modal-box code {
+  font-family: var(--mono);
+  font-size: .76rem;
+  color: var(--mint);
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: .05rem .35rem;
+}
+.modal-box .warn-line { color: var(--amber); }
+.modal-box .warn-line code { color: var(--amber); }
+.modal-box .faint { color: var(--text-faint); font-size: .78rem; }
+.modal-acts { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+
+@media (max-width: 640px) {
+  .station { grid-template-columns: 1.2rem 1fr; }
+  .station .s-detail { grid-column: 2; }
+}
+
+/* ------------------------------------------------------- source mode --- */
+
+/* Documentation and source code are read with different prompts, so the choice
+   is made before the listing rather than buried in it. */
+.modes { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .2rem; }
+.mode {
+  display: flex;
+  align-items: baseline;
+  gap: .45rem;
+  padding: .45rem .8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: .76rem;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.mode input { accent-color: var(--lime); cursor: pointer; }
+.mode b { color: var(--text-dim); font-weight: 600; margin-right: .3rem; }
+.mode.on { border-color: rgba(185, 255, 56, .35); background: rgba(185, 255, 56, .05); }
+.mode.on b { color: var(--lime); }
+
+/* ---------------------------------------------------- execution calls --- */
+
+/* The handles are the deliverable of a code-mode rulebook, so they get a table
+   of their own rather than only living inside the markdown. */
+.calls { padding: .2rem 0; }
+.call {
+  display: grid;
+  grid-template-columns: 4.6rem 1fr;
+  gap: .3rem .7rem;
+  padding: .45rem 1.1rem;
+  border-bottom: 1px solid rgba(42, 55, 66, .45);
+  font-size: .78rem;
+}
+.call:last-child { border-bottom: 0; }
+.call .kind {
+  font-family: var(--mono);
+  font-size: .62rem;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--amber);
+  padding-top: .15rem;
+}
+.call .step { font-family: var(--mono); color: var(--text-dim); font-size: .72rem; }
+.call .handle { font-family: var(--mono); color: var(--lime); word-break: break-all; }
+.call .type { font-family: var(--mono); color: var(--text-faint); font-size: .7rem; }
+.call .none { color: var(--amber); font-size: .74rem; }

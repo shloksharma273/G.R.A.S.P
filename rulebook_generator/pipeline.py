@@ -111,6 +111,7 @@ def generate(
         extraction = extract(
             bounded, provider, config.llm.model, cache=cache,
             manual=bounded.source == "manual",
+            code=bounded.source == "code",
         )
     except NotProcedural as error:
         result.verdict = REJECT

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import textwrap
 
-from .schema import Primitive, Rulebook
+from .schema import Interface, Primitive, Rulebook
 
 WRAP = 79
 
@@ -29,7 +29,21 @@ def humanize(name: str) -> str:
 
 
 def _wrap(text: str) -> str:
-    return "\n".join(textwrap.wrap(" ".join(text.split()), width=WRAP)) if text.strip() else ""
+    return (
+        "\n".join(
+            textwrap.wrap(
+                " ".join(text.split()),
+                width=WRAP,
+                # A ROS name or a message type is one token and must survive
+                # wrapping intact - a handle broken across a line is no longer
+                # a handle, and the round-trip check would lose it.
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
+        )
+        if text.strip()
+        else ""
+    )
 
 
 def _prose_list(names: list[str]) -> str:
@@ -44,13 +58,31 @@ def _prose_list(names: list[str]) -> str:
     return ", ".join(readable[:-1]) + ", and " + readable[-1]
 
 
+def render_interface(interface: Interface) -> str:
+    """The sentence that carries an execution handle.
+
+    Written to be read back exactly: the verb phrase comes from `CALL_PHRASES`,
+    which the parser reads too, and the name and type are fenced in backticks so a
+    reader sees them as code and the parser has an unambiguous boundary.
+    """
+    sentence = f"It is executed by {interface.phrase} `{interface.name}`"
+    if interface.type:
+        sentence += f" of type `{interface.type}`"
+    return sentence + "."
+
+
 def render_primitive(primitive: Primitive) -> str:
-    """One primitive's block: narration, then its preconditions and effects.
+    """One primitive's block: narration, how to invoke it, preconditions, effects.
 
     Preconditions come before effects, and both are stated in the corpus's own
-    phrasing rather than a terser form of our own.
+    phrasing rather than a terser form of our own. The execution handle sits
+    directly after the narration, because it describes the action itself rather
+    than the world around it.
     """
     sentences = [primitive.narration.strip().rstrip(".") + "." if primitive.narration.strip() else ""]
+
+    if primitive.interface is not None:
+        sentences.append(render_interface(primitive.interface))
 
     for state in primitive.requires:
         sentences.append(

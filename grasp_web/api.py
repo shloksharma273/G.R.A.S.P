@@ -11,6 +11,7 @@ Read-only, like the rest of Layer 2 (FR-8).
 from __future__ import annotations
 
 import dataclasses
+import threading
 from typing import Any
 
 from layer2_planning.config import PlannerConfig
@@ -111,3 +112,49 @@ class PlannerService:
         payload = result.to_dict()
         payload["kind"] = "plan"
         return payload
+
+
+class PlannerRegistry:
+    """One `PlannerService` per project, built on first use and cached.
+
+    The CLI plans against the project in `PROJECT_NAME`, which is right for a
+    command you run with one build in mind. The UI cannot: a project is chosen in
+    the browser, after the server started, and a database holds several.
+
+    Caching matters for the same reason `PlannerService` keeps its retriever warm
+    - loading the skills and building the retriever is work that never changes
+    between questions. It also has to be *invalidated*, because a build rewrites
+    exactly what the cache holds: a service kept across a rebuild would answer
+    from the subgraph that build replaced.
+    """
+
+    def __init__(self, db: Any, base: PlannerConfig, provider: Any = None) -> None:
+        self.db = db
+        self.base = base
+        self.provider = provider
+        self._services: dict[str, PlannerService] = {}
+        self._lock = threading.Lock()
+
+    def config_for(self, project: str) -> PlannerConfig:
+        return dataclasses.replace(self.base, prefix=project)
+
+    def for_project(self, project: str) -> PlannerService:
+        name = (project or "").strip() or self.base.prefix
+        with self._lock:
+            service = self._services.get(name)
+            if service is None:
+                service = PlannerService(self.db, self.config_for(name), self.provider)
+                self._services[name] = service
+            return service
+
+    def invalidate(self, project: str = "") -> None:
+        """Forget one project's service, or all of them after a build."""
+        with self._lock:
+            if project:
+                self._services.pop(project.strip(), None)
+            else:
+                self._services.clear()
+
+    def cached(self) -> list[str]:
+        with self._lock:
+            return sorted(self._services)

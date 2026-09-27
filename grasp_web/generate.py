@@ -27,6 +27,10 @@ from kg_read_harness.errors import ConfigError, HarnessError
 #: bar invented to look busy.
 STAGE_FETCHING = "fetching captions"
 
+#: The repository page's own first stage: listing and downloading the chosen
+#: pages before there is any text to reconstruct from.
+STAGE_READING_REPO = "reading the repository"
+
 STATE_RUNNING = "running"
 STATE_DONE = "done"
 STATE_ERROR = "error"
@@ -34,6 +38,55 @@ STATE_ERROR = "error"
 #: Jobs are kept so the page can poll them. Bounded: this is a demo server, and
 #: an unbounded dict of past generations is a slow leak.
 MAX_JOBS = 32
+
+
+def unused_pages(document: str, paths: list[str], rulebook: dict[str, Any] | None) -> list[str]:
+    """Chosen pages that no primitive was drawn from.
+
+    A live run showed why this is needed: four PX4 pages went in - arming,
+    takeoff, return, landing - and a rulebook for arming alone came out, with the
+    model judging the rest a different procedure and the gate raising nothing,
+    because "the rulebook covers less than you selected" is not a defect in the
+    rulebook. It is still something the person who picked those pages has to be
+    told, or the page reports four pages read and shows one procedure's worth of
+    steps without ever saying they are not the same thing.
+
+    A page counts as used when *every* word of some primitive's name appears in
+    it. The gate's own grounding check is looser - any one word - because it asks
+    the opposite question, whether an action was invented, and there a single hit
+    is evidence. Here a single hit proves nothing: "vehicle" appears on every page
+    of a drone manual, so a one-word rule would call every page used and report
+    nothing, ever.
+    """
+    if not rulebook or not paths:
+        return []
+
+    from rulebook_generator.validate import normalize_name
+
+    names = [
+        [token for token in normalize_name(p.get("name", "")).split("_") if token]
+        for p in rulebook.get("primitives") or []
+    ]
+    names = [name for name in names if name]
+    if not names:
+        return []
+
+    # repo.py writes each page as `# <path>` followed by its body, so the
+    # headings are where one page ends and the next begins.
+    marks = []
+    for path in paths:
+        index = document.find(f"# {path}")
+        if index >= 0:
+            marks.append((index, path))
+    marks.sort()
+
+    unused = []
+    for position, (start, path) in enumerate(marks):
+        end = marks[position + 1][0] if position + 1 < len(marks) else len(document)
+        words = set(normalize_name(document[start:end]).split("_"))
+        if not any(all(token in words for token in name) for name in names):
+            unused.append(path)
+    return unused
 
 
 @dataclass
@@ -121,6 +174,7 @@ class GeneratorService:
         prepare: Callable[[], dict[str, Any]] | None = None,
         prepare_stage: str = STAGE_FETCHING,
         source_label: str = "",
+        register: str = "manual",
     ) -> dict[str, Any]:
         """Begin a generation. Returns the job to poll.
 
@@ -156,7 +210,8 @@ class GeneratorService:
                 self._jobs.pop(self._order.pop(0), None)
 
         thread = threading.Thread(
-            target=self._run, args=(job, url, transcript_text, prepare, prepare_stage),
+            target=self._run,
+            args=(job, url, transcript_text, prepare, prepare_stage, register),
             daemon=True,
         )
         thread.start()
@@ -174,6 +229,7 @@ class GeneratorService:
         transcript_text: str,
         prepare: Callable[[], dict[str, Any]] | None = None,
         prepare_stage: str = STAGE_FETCHING,
+        register: str = "manual",
     ) -> None:
         from rulebook_generator.cache import PayloadCache
         from rulebook_generator.pipeline import generate
@@ -194,7 +250,10 @@ class GeneratorService:
                 transcript = Transcript(
                     text=text,
                     video_id=str(prepared.get("source_url") or job.source),
-                    source="manual",
+                    # Source code and documentation are read with different
+                    # prompts: a manual states its preconditions, code states its
+                    # call names and little else.
+                    source="code" if register == "code" else "manual",
                     url=str(prepared.get("source_url") or ""),
                 )
                 job.detail = {
@@ -224,6 +283,12 @@ class GeneratorService:
             )
 
             job.result = self._serialize(result, config)
+            if prepare is not None and job.detail.get("paths"):
+                job.detail["unused"] = unused_pages(
+                    transcript.text,
+                    list(job.detail["paths"]),
+                    (job.result.get("extraction") or {}).get("intermediate"),
+                )
             job.state = STATE_DONE
 
         except HarnessError as error:
@@ -241,7 +306,9 @@ class GeneratorService:
         payload = result.to_dict()
         payload["markdown"] = result.markdown
         payload["source_kind"] = (
-            "manual" if result.transcript and result.transcript.source == "manual" else "video"
+            result.transcript.source
+            if result.transcript and result.transcript.source in ("manual", "code")
+            else "video"
         )
         payload["writable"] = result.verdict in config.accepts
         payload["filename"] = (

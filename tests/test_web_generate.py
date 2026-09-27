@@ -279,11 +279,12 @@ class PageTests(unittest.TestCase):
     def setUp(self):
         self.static = Path("grasp_web/static")
 
-    def test_both_pages_carry_the_nav(self):
-        for name in ("index.html", "generate.html"):
+    def test_every_page_carries_the_nav(self):
+        for name in ("index.html", "generate.html", "repo.html"):
             with self.subTest(name=name):
                 html = (self.static / name).read_text(encoding="utf-8")
                 self.assertIn('href="/generate"', html)
+                self.assertIn('href="/repo"', html)
                 self.assertIn('href="/"', html)
                 self.assertIn('aria-current="page"', html)
 
@@ -295,21 +296,31 @@ class PageTests(unittest.TestCase):
         """
         import re
 
-        html = (self.static / "generate.html").read_text(encoding="utf-8")
-        loaded = re.findall(r"""(?:src|href)\s*=\s*["']([^"']+)["']""", html)
-        external = [u for u in loaded if u.startswith(("http://", "https://"))]
-        self.assertEqual(external, [], f"external asset(s): {external}")
+        for name in ("generate.html", "repo.html"):
+            with self.subTest(name=name):
+                html = (self.static / name).read_text(encoding="utf-8")
+                loaded = re.findall(r"""(?:src|href)\s*=\s*["']([^"']+)["']""", html)
+                external = [u for u in loaded if u.startswith(("http://", "https://"))]
+                self.assertEqual(external, [], f"external asset(s): {external}")
 
     def test_generated_content_is_escaped(self):
         """The rulebook markdown is model-written; it is never trusted markup.
 
         It reaches the DOM through `highlight()`, which is the one place that
-        has to escape before it adds its own spans.
+        has to escape before it adds its own spans. That rendering is shared by
+        both generator pages, so it lives in rulebook.js.
         """
-        js = (self.static / "generate.js").read_text(encoding="utf-8")
+        js = (self.static / "rulebook.js").read_text(encoding="utf-8")
         self.assertIn("const esc =", js)
         highlight = js[js.index("function highlight("):]
         self.assertIn("esc(markdown)", highlight[: highlight.index("}")])
+
+    def test_both_generator_pages_load_the_shared_renderer(self):
+        """The verdict rendering is shared, so neither page may fork its own."""
+        for name in ("generate.html", "repo.html"):
+            with self.subTest(name=name):
+                html = (self.static / name).read_text(encoding="utf-8")
+                self.assertIn("/static/rulebook.js", html)
 
     def test_the_page_states_why_the_gate_exists(self):
         html = (self.static / "generate.html").read_text(encoding="utf-8")

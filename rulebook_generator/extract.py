@@ -220,6 +220,136 @@ MANUAL_WORKED_EXAMPLE = {
     ],
 }
 
+
+CODE_SYSTEM_PROMPT = """\
+You turn the source of a robot driver or service into a structured robot skill \
+rulebook that can actually be EXECUTED.
+
+This is neither a transcript nor a manual. It is the code and interface \
+definitions of a system that exposes operations over an API - a ROS 2 driver \
+advertising services, topics and actions, or an HTTP service exposing endpoints. \
+So one field matters more than everything else:
+
+- interface   THE POINT. For every primitive, the concrete handle a program must
+              call to run it: the kind (service / topic / action / api), the name
+              EXACTLY as the source writes it, and the message or type name.
+              A plan without this can say what to do and not how to do it.
+- primitives  the operations the system exposes - one per callable thing
+- objects     the parts acted on (gripper, arm, brakes, program)
+- states      conditions of the robot the calls require and produce
+- requires    what must be true before this call will succeed
+- produces    what is true after it returns
+- ordering    implied by those conditions
+
+Rules:
+1. COPY INTERFACE NAMES VERBATIM. `/dashboard_client/brake_release` is a name; \
+`dashboard_client_brake_release` is not, and will not resolve. Keep the leading \
+slash, the namespace and the case exactly as the source writes them. Do the same \
+for the type: `std_srvs/srv/Trigger`, not `Trigger`.
+2. NEVER INVENT AN INTERFACE. If the source does not state the name of a call, \
+omit the interface for that primitive rather than guessing one. An invented \
+service name is a call that fails at runtime, which is worse than an absent one \
+that fails honestly at review.
+3. Every primitive must be GROUNDED: the operation must actually be declared or \
+documented in the text - a `create_service` call, a `.srv` file, a documented \
+endpoint. Do not add steps the source does not expose.
+4. Preconditions and effects ARE usually inferrable here and you should infer \
+them: a driver that exposes `power_on` and `brake_release` implies the robot must \
+be powered before the brakes release. Say so.
+5. A state is a condition of the robot that is true or false - `robot_powered_on`, \
+`brakes_released`, `program_running`. It is not a call and not a message type.
+6. Use snake_case for skill, primitive, object and state names. Interface names \
+and types are the ONE exception: they stay exactly as written.
+7. Never put "and" inside a name.
+8. The task is usually implicit - the source exposes capabilities rather than one \
+procedure. Assemble the primitives into the one coherent task the user asked for, \
+in the order their preconditions imply. If the source covers several unrelated \
+subsystems, take the FIRST coherent task and set "multiple_tasks": true.
+9. If the text exposes no callable operations at all - a build file, a licence, a \
+changelog, a pure data structure - return exactly {"not_procedural": true, \
+"reason": "..."} and nothing else.
+
+Return a single JSON object and nothing else, of exactly this shape:
+"""
+
+#: The code prompt's schema is the shared one plus the field that makes a rulebook
+#: executable. Kept separate rather than added to `INTERMEDIATE_SCHEMA`, because a
+#: video or a manual describes what a person does and has no handles to give - and
+#: a prompt that asks for one there invites the model to invent it.
+CODE_SCHEMA = {
+    **INTERMEDIATE_SCHEMA,
+    "primitives": [
+        {
+            **INTERMEDIATE_SCHEMA["primitives"][0],
+            "interface": {
+                "kind": "service | topic | action | api",
+                "name": "EXACTLY as the source writes it, with its leading slash and namespace",
+                "type": "the message or service type, e.g. std_srvs/srv/Trigger",
+            },
+        }
+    ],
+}
+
+#: A worked example in the code register. Deliberately a mobile base rather than
+#: an arm: it has to teach the *shape* - a verbatim handle per step, states that
+#: are robot conditions - without handing over names the model might paste back
+#: into a rulebook for a different robot.
+CODE_WORKED_EXAMPLE = {
+    "skill": "drive_to_charging_dock",
+    "title": "Drive To Charging Dock",
+    "overview": (
+        "This rulebook describes driving a mobile base to its charging dock as a "
+        "sequence of primitive robot actions, each with the ROS 2 interface a "
+        "program calls to execute it."
+    ),
+    "objects": ["motor_controller", "costmap", "base", "dock"],
+    "states": [
+        "motors_enabled", "costmap_clear", "goal_accepted", "base_at_dock",
+    ],
+    "primitives": [
+        {
+            "name": "enable_motors",
+            "narration": "The robot enables the motor controller.",
+            "requires": [],
+            "produces": ["motors_enabled"],
+            "uses": ["motor_controller"],
+            "interface": {
+                "kind": "service",
+                "name": "/motor_controller/enable",
+                "type": "std_srvs/srv/Trigger",
+            },
+        },
+        {
+            "name": "clear_costmap",
+            "narration": "The robot clears the stale costmap before planning.",
+            "requires": ["motors_enabled"],
+            "produces": ["costmap_clear"],
+            "uses": ["costmap"],
+            "interface": {
+                "kind": "service",
+                "name": "/global_costmap/clear_entirely_global_costmap",
+                "type": "nav2_msgs/srv/ClearEntireCostmap",
+            },
+        },
+        {
+            "name": "send_navigation_goal",
+            "narration": "The robot sends the dock pose as a navigation goal.",
+            "requires": ["motors_enabled", "costmap_clear"],
+            "produces": ["goal_accepted", "base_at_dock"],
+            "uses": ["base", "dock"],
+            "interface": {
+                "kind": "action",
+                "name": "/navigate_to_pose",
+                "type": "nav2_msgs/action/NavigateToPose",
+            },
+        },
+    ],
+    "ordering": [
+        "The motors must be enabled before the costmap is cleared.",
+        "The motors must be enabled and the costmap clear before a goal is sent.",
+    ],
+}
+
 REPROMPT_SUFFIX = (
     "\n\nYour previous reply could not be used. Return ONLY the JSON object of the "
     "shape given above - no prose, no code fences - with every name in snake_case "
@@ -227,14 +357,25 @@ REPROMPT_SUFFIX = (
 )
 
 
-def build_system_prompt(manual: bool = False) -> str:
+def build_system_prompt(manual: bool = False, code: bool = False) -> str:
     """The extraction prompt for the kind of source in hand.
 
-    The two registers pull in opposite directions, so they get opposite prompts and
-    opposite worked examples. Video: preconditions are absent and must be inferred.
-    Manual: preconditions are on the page and inventing one contradicts a document
-    that was deliberately specific.
+    Three registers, pulling in different directions, so each gets its own prompt
+    and its own worked example. Video: preconditions are absent and must be
+    inferred. Manual: preconditions are on the page and inventing one contradicts
+    a document that was deliberately specific. Code: the preconditions are
+    inferrable but the *interface names* are not - a handle that is guessed is a
+    call that fails, so those must be copied verbatim or omitted.
     """
+    if code:
+        return (
+            CODE_SYSTEM_PROMPT
+            + json.dumps(CODE_SCHEMA, indent=2)
+            + "\n\nHere is one complete worked example, for a mobile base. Note that "
+            "every primitive carries the exact handle a program calls, and that the "
+            "handles are copied rather than invented:\n\n"
+            + json.dumps(CODE_WORKED_EXAMPLE, indent=2)
+        )
     if manual:
         return (
             MANUAL_SYSTEM_PROMPT
@@ -254,7 +395,16 @@ def build_system_prompt(manual: bool = False) -> str:
     )
 
 
-def build_user_message(transcript: Transcript, manual: bool = False) -> str:
+def build_user_message(
+    transcript: Transcript, manual: bool = False, code: bool = False
+) -> str:
+    if code:
+        return (
+            "Reconstruct an executable rulebook for the task this source exposes. "
+            "Every primitive must carry the interface a program calls to run it, "
+            "copied exactly as written below.\n\n"
+            f"SOURCE ({transcript.words} words):\n{transcript.text}"
+        )
     if manual:
         return (
             "Reconstruct the rulebook for the procedure described in this "
@@ -310,6 +460,7 @@ def extract(
     model: str,
     cache: Any = None,
     manual: bool | None = None,
+    code: bool | None = None,
 ) -> Extraction:
     """One schema-constrained pass, cached by transcript hash (FR-3, FR-6).
 
@@ -318,8 +469,10 @@ def extract(
     because the two prompts give different rulebooks for identical input text, and
     a cache that ignored the mode would serve one for the other.
     """
+    code = (transcript.source == "code") if code is None else code
     manual = (transcript.source == "manual") if manual is None else manual
-    key = f"{model}|{'manual' if manual else 'video'}|{transcript.digest}"
+    register = "code" if code else "manual" if manual else "video"
+    key = f"{model}|{register}|{transcript.digest}"
     if cache is not None:
         cached = cache.get(key)
         if cached is not None:
@@ -336,8 +489,8 @@ def extract(
             except ExtractionFailed:
                 pass  # an unusable cached reply behaves as a miss
 
-    system = build_system_prompt(manual=manual)
-    user = build_user_message(transcript, manual=manual)
+    system = build_system_prompt(manual=manual, code=code)
+    user = build_user_message(transcript, manual=manual, code=code)
     reprompted = False
 
     for attempt in (0, 1):
