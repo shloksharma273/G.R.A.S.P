@@ -227,6 +227,16 @@ ol.steps li:last-child { border-bottom: 0; }
 .call i { font-style: normal; color: var(--text-dim); margin-right: .45rem; }
 .call .type { color: var(--text-dim); margin-left: .45rem; }
 
+/* A compound plan: one header row per task, then that task's steps. */
+ol.steps li.task { background: var(--surface-2); border-bottom-color: var(--line); }
+ol.steps li.task .num { color: var(--mint); }
+li.task .said { color: var(--text); }
+li.task .arrow { color: var(--text-faint); margin: 0 .45rem; }
+li.task .skill { font-family: var(--mono); font-size: .8rem; color: var(--lime); }
+li.task .type { font-family: var(--mono); font-size: .74rem; color: var(--text-dim); margin-left: .6rem; }
+li.task .skipped { font-size: .74rem; color: var(--text-faint); margin-top: .25rem; }
+li.task-clarify .card { margin: 0; }
+
 /* -------------------------------------------------------- clarification -- */
 
 .card.clarify { border-color: rgba(255, 209, 102, .35); }

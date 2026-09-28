@@ -17,7 +17,7 @@ point.
 from .compose import compose, template_descriptions
 from .config import PlannerConfig, load_planner_config
 from .order import CyclicPlan, Ordering, order_plan
-from .pipeline import plan_command
+from .pipeline import plan_command, plan_goal
 from .plan import Clarification, Plan, Step
 from .report import dump_json, print_clarification, print_plan
 from .retrieve import Candidate, GoalResolution, LexicalRetriever, resolve_goal
@@ -27,6 +27,7 @@ __version__ = "1.0.0"
 
 __all__ = [
     "plan_command",
+    "plan_goal",
     "PlannerConfig",
     "load_planner_config",
     "Plan",

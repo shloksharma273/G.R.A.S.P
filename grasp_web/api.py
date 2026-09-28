@@ -1,5 +1,9 @@
 """The JSON API behind the web UI — a thin shell over Layer 2.
 
+Commands go through the task decomposer in front of it, so "go to 2,1 and then
+charge the robot" answers as one merged run of two plans; a one-task command
+answers exactly as Layer 2 alone would.
+
 Deliberately thin. Every decision the frontend displays is already made by the
 planner: the goal, the ordering, the clarification. This module connects once,
 keeps the retriever warm, and serializes; it holds no planning logic of its own,
@@ -16,10 +20,10 @@ from typing import Any
 
 from layer2_planning.config import PlannerConfig
 from layer2_planning.order import CyclicPlan
-from layer2_planning.pipeline import plan_command
 from layer2_planning.plan import Clarification, Plan
 from layer2_planning.retrieve import LexicalRetriever, VectorRetriever, load_skills
 from layer2_planning.traverse import IncompletePlanGraph
+from task_decomposition.compound import CompoundPlan, plan_compound
 
 
 class PlannerService:
@@ -89,8 +93,15 @@ class PlannerService:
             )
 
         try:
-            result = plan_command(
-                command, self.db, config, provider=self.provider, retriever=self.retriever
+            # Through the task decomposer: a one-task command comes back as the
+            # same Plan or Clarification as before, a compound one as several.
+            result = plan_compound(
+                command,
+                self.db,
+                config,
+                provider=self.provider,
+                retriever=self.retriever,
+                skills=self._skills,
             )
         except IncompletePlanGraph as error:
             return {"kind": "error", "message": str(error), "code": "incomplete_plangraph"}
@@ -106,6 +117,11 @@ class PlannerService:
         if isinstance(result, Clarification):
             payload = result.to_dict()
             payload["kind"] = "clarification"
+            return payload
+
+        if isinstance(result, CompoundPlan):
+            payload = result.to_dict()
+            payload["kind"] = "compound"
             return payload
 
         assert isinstance(result, Plan)

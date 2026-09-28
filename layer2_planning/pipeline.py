@@ -18,7 +18,7 @@ from .compose import METHOD_TEMPLATE, compose
 from .config import PlannerConfig
 from .order import CyclicPlan, order_plan
 from .plan import Clarification, Plan, build_plan
-from .retrieve import resolve_goal
+from .retrieve import Candidate, resolve_goal
 from .traverse import IncompletePlanGraph, retrieve_subgraph
 
 
@@ -53,6 +53,25 @@ def plan_command(
 
     goal = resolution.goal
     assert goal is not None
+    return plan_goal(command, goal, resolution.method, db, config, provider=provider, now=now)
+
+
+def plan_goal(
+    command: str,
+    goal: Candidate,
+    match_method: str,
+    db: Any,
+    config: PlannerConfig,
+    provider: Provider | None = None,
+    now: str | None = None,
+) -> Plan:
+    """Stages 2-4 for a goal that is already decided.
+
+    `plan_command` reaches here through goal resolution. The task decomposer
+    reaches here directly, having had the model pick the skill from the catalog -
+    the stages that supply correctness and order are the same either way.
+    """
+    schema = config.schema
 
     # --- Stage 2: subgraph retrieval ---------------------------------------
     subgraph = retrieve_subgraph(
@@ -77,7 +96,7 @@ def plan_command(
         "generated_at": now or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "model_id": composition.model if composition.method != METHOD_TEMPLATE else None,
         "match_confidence": round(goal.score, 4),
-        "match_method": resolution.method,
+        "match_method": match_method,
         "composer": composition.method,
         "ordering": ordering.to_dict(),
     }
@@ -105,4 +124,4 @@ def plan_command(
     )
 
 
-__all__ = ["plan_command", "CyclicPlan", "IncompletePlanGraph"]
+__all__ = ["plan_command", "plan_goal", "CyclicPlan", "IncompletePlanGraph"]

@@ -150,6 +150,7 @@ async function ask(command) {
 
 function render(payload) {
   if (payload.kind === "plan") return renderPlan(payload);
+  if (payload.kind === "compound") return renderCompound(payload);
   if (payload.kind === "clarification") return renderClarification(payload);
   return el(
     `<div class="card error"><div class="card-body">${esc(payload.message || "something went wrong")}</div></div>`
@@ -170,6 +171,9 @@ function renderPlan(plan) {
         ? "The model wrote the wording only. The order came from the graph."
         : "Templated wording. The order is identical to the model-written version."
     }">${meta.composer === "llm" ? "model wording" : "templated"}</span>`,
+    meta.parameters && Object.keys(meta.parameters).length
+      ? `<span class="pill" title="Values the model copied out of the command.">with <b>${esc(paramText(meta.parameters))}</b></span>`
+      : "",
   ].join("");
 
   const card = el(`<div class="card">
@@ -181,35 +185,94 @@ function renderPlan(plan) {
   </div>`);
 
   const list = card.querySelector("ol");
-  for (const step of plan.steps) {
-    const tags = [
-      ...step.requires.map((s) => `<span class="tag req"><i>requires</i>${esc(readable(s))}</span>`),
-      ...step.produces.map((s) => `<span class="tag prod"><i>produces</i>${esc(readable(s))}</span>`),
-      ...step.uses.map((s) => `<span class="tag uses"><i>uses</i>${esc(readable(s))}</span>`),
-    ].join("");
-    const call = step.interface
-      ? `<div class="call"><i>${esc(CALL_VERBS[step.interface.kind] || "call")}</i><code>${esc(step.interface.name)}</code>${
-          step.interface.type ? `<span class="type">${esc(step.interface.type)}</span>` : ""
-        }</div>`
-      : "";
-
-    list.appendChild(
-      el(`<li>
-        <div class="num">${step.order}</div>
-        <div class="desc">
-          <div class="action">${esc(step.action)}</div>
-          ${esc(step.description)}
-          ${call}
-        </div>
-        ${tags ? `<div class="tags">${tags}</div>` : ""}
-      </li>`)
-    );
-  }
+  for (const step of plan.steps) list.appendChild(stepItem(step));
 
   if (meta.warning) {
     card.appendChild(
       el(`<div class="card-body"><p>${esc(meta.warning)}</p></div>`)
     );
+  }
+  return card;
+}
+
+// One step row, shared by a single plan and a compound one.
+function stepItem(step) {
+  const tags = [
+    ...step.requires.map((s) => `<span class="tag req"><i>requires</i>${esc(readable(s))}</span>`),
+    ...step.produces.map((s) => `<span class="tag prod"><i>produces</i>${esc(readable(s))}</span>`),
+    ...step.uses.map((s) => `<span class="tag uses"><i>uses</i>${esc(readable(s))}</span>`),
+  ].join("");
+  const call = step.interface
+    ? `<div class="call"><i>${esc(CALL_VERBS[step.interface.kind] || "call")}</i><code>${esc(step.interface.name)}</code>${
+        step.interface.type ? `<span class="type">${esc(step.interface.type)}</span>` : ""
+      }</div>`
+    : "";
+  const values = step.parameters && Object.keys(step.parameters).length
+    ? `<div class="call"><i>with</i><code>${esc(paramText(step.parameters))}</code></div>`
+    : "";
+
+  return el(`<li>
+    <div class="num">${step.order}</div>
+    <div class="desc">
+      <div class="action">${esc(step.action)}</div>
+      ${esc(step.description)}
+      ${call}
+      ${values}
+    </div>
+    ${tags ? `<div class="tags">${tags}</div>` : ""}
+  </li>`);
+}
+
+const paramText = (parameters) =>
+  Object.entries(parameters).map(([k, v]) => `${k}=${Array.isArray(v) ? `[${v.join(", ")}]` : v}`).join("  ");
+
+// A compound command: the model (or the rule splitter) cut it into tasks, Layer 2
+// planned each, and repeated bring-up was left out of the merged run.
+function renderCompound(payload) {
+  const split = payload.decomposition || {};
+  const pills = [
+    `<span class="pill">${payload.subtasks.length} tasks</span>`,
+    `<span class="pill">${payload.steps.length} steps</span>`,
+    `<span class="pill" title="${esc(split.fallback_reason || "The model split the command and picked each skill from the catalog.")}">split by <b>${
+      split.method === "llm" ? "model" : "rules"
+    }</b></span>`,
+    payload.executable ? "" : `<span class="pill warn">needs clarifying</span>`,
+  ].join("");
+
+  const card = el(`<div class="card compound">
+    <div class="card-head">
+      <span class="goal">${esc(payload.subtasks.length)} tasks</span>
+      <span class="meta">${pills}</span>
+    </div>
+    <ol class="steps"></ol>
+  </div>`);
+
+  const list = card.querySelector("ol");
+  for (const task of payload.subtasks) {
+    const planned = task.result.kind === "plan";
+    const skipped = (payload.skipped || []).filter((s) => s.subtask === task.index);
+    list.appendChild(
+      el(`<li class="task">
+        <div class="num">T${task.index}</div>
+        <div class="desc">
+          <span class="said">&ldquo;${esc(task.command)}&rdquo;</span>
+          ${planned ? `<span class="arrow">&rarr;</span><span class="skill">${esc(readable(task.result.goal))}</span>` : ""}
+          ${Object.keys(task.parameters || {}).length ? `<span class="type">${esc(paramText(task.parameters))}</span>` : ""}
+          ${skipped.length ? `<div class="skipped">already done: ${skipped
+            .map((s) => `${esc(readable(s.action))} (step ${s.satisfied_by})`)
+            .join(", ")}</div>` : ""}
+        </div>
+      </li>`)
+    );
+    if (!planned) {
+      const item = el(`<li class="task-clarify"><div></div><div class="desc"></div></li>`);
+      item.querySelector(".desc").appendChild(renderClarification(task.result));
+      list.appendChild(item);
+      continue;
+    }
+    for (const step of payload.steps.filter((s) => s.subtask === task.index)) {
+      list.appendChild(stepItem(step));
+    }
   }
   return card;
 }

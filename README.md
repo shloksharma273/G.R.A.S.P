@@ -14,6 +14,7 @@ upstream that can author the rulebooks themselves from video.
 | 4 · Normalize direction & order | settle head → tail, derive `precedes` | built (`direction_normalizer/`) |
 | 5 · Write | persist to the PlanGraph | built (`plangraph_writer/`) |
 | **Layer 2** · Planning | command → goal → subgraph → ordered `plan.json` | built (`layer2_planning/`) |
+| **Decomposition** · Compound commands | command → subtasks → one Layer 2 plan each → merged run | built (`task_decomposition/`) |
 | **UI** · Web front end | discover projects, build their PlanGraph, ask in a browser | built (`grasp_web/`) |
 
 ---
@@ -1021,6 +1022,67 @@ one the PRD calls out: `assemble_burger` comes after both `add_cheese` and
 python -m unittest discover -s tests -t .   # 562 tests, no network, no database
 python demo_plan_offline.py                 # all six rulebooks, offline, no LLM
 ```
+
+
+---
+
+## Task decomposition — compound commands
+
+Layer 2 plans exactly one skill per command, so "go to 2,1 and then charge the
+robot" needs cutting first. `task_decomposition/` sits in front of Layer 2 and
+does that, and the web planning page goes through it by default:
+
+```
+command ─► decompose ─► [subtask 1, subtask 2, …] ─► Layer 2 per subtask ─► merge ─► one run
+```
+
+**The model splits, picks and copies — nothing more.** It is handed the skill
+catalog the PlanGraph already holds (each skill with its steps) and returns, per
+subtask, the words it covers, one catalog skill, and the values the user stated
+(`x`, `y`, `distance_m`, `yaw_deg`, …). A guard rejects a skill outside the
+catalog and any value that does not appear in the command — an invented
+coordinate is a robot driving somewhere else — reprompts once, then falls back to
+a deterministic splitter that cuts on "then" / "and" / ";" and lets Layer 2's own
+goal resolution pick each skill. With no LLM configured, that splitter is the path.
+
+**Each subtask is a normal Layer 2 plan.** Order and membership still come from
+the graph. A skill the model chose is planned directly (`match_method:
+"decomposer"`, with the lexical score kept for honesty); an unmatched subtask goes
+through goal resolution and may come back as a clarification, in which case the
+whole run is marked `executable: false`.
+
+**Merging drops repeated bring-up, never a goal.** Every skill carries its own
+prerequisites, so "charge the robot" would start localization again. A later
+subtask's *supporting* step (something later in its own plan depends on it) is
+left out when an earlier subtask already ran it, and reported in `skipped`. A
+subtask's *goal* steps are always kept, so "go to 1,0 then go to 2,1" navigates
+twice. Values land on the goal step, next to its execution handle:
+
+```
+  Task 1: "go to 2,1" ↳ go_to_location  [x=2, y=1]
+     1. start_localization      ↳ service:  /lifecycle_manager_localization/is_active
+     2. set_initial_pose        ↳ topic:    /initialpose
+     3. start_navigation        ↳ service:  /lifecycle_manager_navigation/is_active
+     4. navigate_to_goal        ↳ topic:    /goal_pose   ↳ with: x=2, y=1
+  Task 2: "charge the robot" ↳ dock_at_charger
+      skip start_localization, set_initial_pose, start_navigation (already run)
+     5. dock_robot              ↳ topic:    /dock_trigger
+```
+
+The graph models no negative effects — nothing says undocking makes "docked"
+false — so a skipped step is assumed to still hold. Right for bring-up; wrong for
+a state a later task undoes.
+
+```bash
+python plan_task.py "go to 2,1 and then charge the robot"
+python plan_task.py "back up 0.3 m, then rotate 90 degrees" --format json
+python plan_task.py "go to location then dock at charger" --no-llm
+```
+
+A one-task command comes back as Layer 2's own `plan.json`, with the
+decomposition and any extracted values under `meta`. A compound one is
+`{command, executable, decomposition, subtasks[], steps[], skipped[]}`, where each
+merged step is a Layer 2 step plus `subtask`, `goal` and `parameters`.
 
 
 ---
