@@ -36,6 +36,14 @@ examples:
   python generate_rulebook.py --transcript captions.txt     # no network needed
   python generate_rulebook.py --transcript manual.md --manual   # from documentation
   python generate_rulebook.py VIDEOID --write --ingest      # link-in to plan-out
+  python generate_rulebook.py --transcript driver.txt --code --split --write
+                                                            # one rulebook per task
+
+one rulebook per task (--split):
+  A reference rulebook of every operation is reconstructed first, the model
+  picks the tasks a user would ask for, and each task is cut out of the
+  reference by following its goal step's preconditions back. Every rulebook is
+  graded separately; --write saves each one strictness allows.
 
 the gate:
   Every generated rulebook is run through this project's own bridge - Station 2
@@ -84,6 +92,16 @@ def build_parser() -> argparse.ArgumentParser:
             "rather than inferring them"
         ),
     )
+    parser.add_argument(
+        "--code",
+        action="store_true",
+        help="the --transcript file is source code: every step carries its interface",
+    )
+    parser.add_argument(
+        "--split",
+        action="store_true",
+        help="a reference rulebook of every operation, then one rulebook per task",
+    )
     parser.add_argument("--write", action="store_true", help="save the rulebook to the output dir")
     parser.add_argument(
         "--ingest",
@@ -101,6 +119,8 @@ def run(
     url: str | None = None,
     transcript_path: str | None = None,
     manual: bool = False,
+    code: bool = False,
+    split: bool = False,
     write: bool = False,
     do_ingest: bool = False,
     show: bool = False,
@@ -118,10 +138,13 @@ def run(
         config = dataclasses.replace(config, cache_enabled=False)
 
     transcript = (
-        from_file(transcript_path, url=url or "", manual=manual)
+        from_file(transcript_path, url=url or "", manual=manual, code=code)
         if transcript_path
         else from_youtube(url or "")
     )
+
+    if split:
+        return run_split(transcript, config, write, output_format, stdout, provider)
 
     result = generate(
         transcript,
@@ -161,6 +184,60 @@ def run(
     return {ACCEPT: EXIT_OK, FLAG: EXIT_FLAGGED, REJECT: EXIT_REJECTED}[result.verdict]
 
 
+def run_split(transcript: Any, config: Any, write: bool, output_format: str, stdout: IO[str], provider: Any) -> int:
+    """--split: the reference, then one graded rulebook per task."""
+    from kg_read_harness.output import glyphs
+
+    from .split import generate_split
+
+    split = generate_split(
+        transcript, config, provider=provider,
+        cache=PayloadCache(config.cache_path, config.cache_enabled),
+    )
+    written: list[str] = []
+    if write:
+        for book in split.tasks:
+            if book.writable and book.verdict in config.accepts:
+                book.written_to = write_rulebook(book.markdown, book.rulebook.skill, config.output_dir)
+                written.append(book.written_to)
+
+    if output_format == "json":
+        json.dump(split.to_dict(), stdout, indent=2, ensure_ascii=False)
+        stdout.write("\n")
+    else:
+        g = glyphs(stdout)
+        reference = split.reference
+        print(f"Rulebook Generator {g['em']} one rulebook per task", file=stdout)
+        print("=" * 72, file=stdout)
+        if reference.rulebook is not None:
+            print(
+                f"  reference  {reference.rulebook.skill}: {len(reference.rulebook.primitives)} "
+                f"steps [{reference.verdict}]",
+                file=stdout,
+            )
+        if split.choice is not None:
+            how = "chosen by the model" if split.choice.method == "llm" else (
+                f"chosen by rule ({split.choice.fallback_reason})"
+            )
+            print(f"  tasks      {len(split.tasks)} {how}", file=stdout)
+        print("-" * 72, file=stdout)
+        for book in split.tasks:
+            steps = " -> ".join(book.rulebook.primitive_names)
+            print(f"  {book.verdict:<16} {book.rulebook.skill}", file=stdout)
+            print(f"  {'':<16} {steps}", file=stdout)
+        print("-" * 72, file=stdout)
+        if split.reason:
+            print(f"  {split.reason}", file=stdout)
+        if written:
+            print(f"  wrote {len(written)} rulebook(s) to {config.output_dir}", file=stdout)
+        elif split.tasks and not write:
+            print("  nothing written; pass --write to save the rulebooks strictness allows.", file=stdout)
+
+    if not split.tasks:
+        return EXIT_REJECTED
+    return EXIT_OK if split.accepted else EXIT_FLAGGED
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.url and not args.transcript:
@@ -170,6 +247,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             url=args.url,
             transcript_path=args.transcript,
             manual=args.manual,
+            code=args.code,
+            split=args.split,
             write=args.write,
             do_ingest=args.ingest,
             show=args.show,

@@ -19,6 +19,7 @@ is mandatory precisely because this stage is inference.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -246,26 +247,29 @@ Rules:
 `dashboard_client_brake_release` is not, and will not resolve. Keep the leading \
 slash, the namespace and the case exactly as the source writes them. Do the same \
 for the type: `std_srvs/srv/Trigger`, not `Trigger`.
-2. NEVER INVENT AN INTERFACE. If the source does not state the name of a call, \
+2. A shell command - `ros2 launch ...`, `source setup.bash && export ...` - is NOT \
+an interface. It is something an operator types. Leave the interface out for such \
+a step rather than putting the command in it.
+3. NEVER INVENT AN INTERFACE. If the source does not state the name of a call, \
 omit the interface for that primitive rather than guessing one. An invented \
 service name is a call that fails at runtime, which is worse than an absent one \
 that fails honestly at review.
-3. Every primitive must be GROUNDED: the operation must actually be declared or \
+4. Every primitive must be GROUNDED: the operation must actually be declared or \
 documented in the text - a `create_service` call, a `.srv` file, a documented \
 endpoint. Do not add steps the source does not expose.
-4. Preconditions and effects ARE usually inferrable here and you should infer \
+5. Preconditions and effects ARE usually inferrable here and you should infer \
 them: a driver that exposes `power_on` and `brake_release` implies the robot must \
 be powered before the brakes release. Say so.
-5. A state is a condition of the robot that is true or false - `robot_powered_on`, \
+6. A state is a condition of the robot that is true or false - `robot_powered_on`, \
 `brakes_released`, `program_running`. It is not a call and not a message type.
-6. Use snake_case for skill, primitive, object and state names. Interface names \
+7. Use snake_case for skill, primitive, object and state names. Interface names \
 and types are the ONE exception: they stay exactly as written.
-7. Never put "and" inside a name.
-8. The task is usually implicit - the source exposes capabilities rather than one \
+8. Never put "and" inside a name.
+9. The task is usually implicit - the source exposes capabilities rather than one \
 procedure. Assemble the primitives into the one coherent task the user asked for, \
 in the order their preconditions imply. If the source covers several unrelated \
 subsystems, take the FIRST coherent task and set "multiple_tasks": true.
-9. If the text exposes no callable operations at all - a build file, a licence, a \
+10. If the text exposes no callable operations at all - a build file, a licence, a \
 changelog, a pure data structure - return exactly {"not_procedural": true, \
 "reason": "..."} and nothing else.
 
@@ -350,6 +354,36 @@ CODE_WORKED_EXAMPLE = {
     ],
 }
 
+#: Appended in split mode, where the first pass is a *reference* rulebook for the
+#: whole system rather than one task. It overrides each register's "take the first
+#: coherent task" rule, because the tasks are cut out of this afterwards - a step
+#: the reference leaves out is a step no task rulebook can ever contain.
+CATALOG_SUFFIX = """
+
+THIS RUN IS DIFFERENT: build a REFERENCE rulebook for the WHOLE system, not one \
+task. It will afterwards be sliced into one rulebook per task a user can ask for, \
+so every operation the source describes must be in it.
+
+- Cover EVERY operation, procedure and command the source describes, including \
+bring-up, recovery, maintenance and test steps. Ignore the rule about taking only \
+the first task, and do not set "multiple_tasks".
+- Keep each step's preconditions COMPLETE. A task is cut out by following \
+`requires` back to the steps that produce it, so a missing precondition drops a \
+bring-up step from every task that needs it.
+- Give states that several steps share ONE name, so that the step producing it \
+and the steps requiring it connect.
+- When the source gives SEVERAL WAYS to reach the same states - a real-robot launch \
+and a simulation launch, a light profile and a full one - make them ONE primitive \
+and put each variant's command in its narration. A plan runs one bring-up, never \
+several; separate primitives for each variant get mixed together.
+- A check that only confirms an earlier step worked - `verify_...`, `check_...`, \
+`measure_...` - belongs in the narration of the step it checks, not as a primitive \
+of its own, unless a user would ask for that check by itself.
+- Aim for the grain of a task a user asks for: one primitive per thing the robot \
+does, not per command typed.
+- `skill` names the whole system, e.g. `operate_<robot>`.
+"""
+
 REPROMPT_SUFFIX = (
     "\n\nYour previous reply could not be used. Return ONLY the JSON object of the "
     "shape given above - no prose, no code fences - with every name in snake_case "
@@ -357,7 +391,13 @@ REPROMPT_SUFFIX = (
 )
 
 
-def build_system_prompt(manual: bool = False, code: bool = False) -> str:
+def build_system_prompt(manual: bool = False, code: bool = False, catalog: bool = False) -> str:
+    """The extraction prompt, with the reference-rulebook rules when `catalog`."""
+    prompt = _register_prompt(manual=manual, code=code)
+    return prompt + CATALOG_SUFFIX if catalog else prompt
+
+
+def _register_prompt(manual: bool = False, code: bool = False) -> str:
     """The extraction prompt for the kind of source in hand.
 
     Three registers, pulling in different directions, so each gets its own prompt
@@ -396,8 +436,16 @@ def build_system_prompt(manual: bool = False, code: bool = False) -> str:
 
 
 def build_user_message(
-    transcript: Transcript, manual: bool = False, code: bool = False
+    transcript: Transcript, manual: bool = False, code: bool = False, catalog: bool = False
 ) -> str:
+    if catalog:
+        return (
+            "Reconstruct ONE reference rulebook covering every operation this source "
+            "describes"
+            + (", each with the interface a program calls to run it" if code else "")
+            + ".\n\n"
+            f"SOURCE ({transcript.words} words):\n{transcript.text}"
+        )
     if code:
         return (
             "Reconstruct an executable rulebook for the task this source exposes. "
@@ -432,9 +480,17 @@ class Extraction:
 def parse_reply(text: str) -> dict[str, Any]:
     if not text or not text.strip():
         raise ExtractionFailed("the model returned an empty message")
+    body = _FENCE.sub("", text.strip())
     try:
-        payload = json.loads(_FENCE.sub("", text.strip()))
+        payload = json.loads(body)
     except json.JSONDecodeError as error:
+        if error.pos >= len(body) or error.msg.startswith("Unterminated string"):
+            # The parser ran out of input: the reply was cut off, not malformed.
+            raise ExtractionFailed(
+                f"the reply stops mid-JSON after {len(body)} characters - it was most "
+                "likely cut off at the model's output limit (raise LLM_MAX_TOKENS, or "
+                "RULEBOOK_REFERENCE_MAX_TOKENS for a split run)"
+            ) from None
         raise ExtractionFailed(f"reply is not valid JSON ({error})") from None
     if not isinstance(payload, dict):
         raise ExtractionFailed(f"expected a JSON object, got {type(payload).__name__}")
@@ -461,6 +517,7 @@ def extract(
     cache: Any = None,
     manual: bool | None = None,
     code: bool | None = None,
+    catalog: bool = False,
 ) -> Extraction:
     """One schema-constrained pass, cached by transcript hash (FR-3, FR-6).
 
@@ -472,7 +529,13 @@ def extract(
     code = (transcript.source == "code") if code is None else code
     manual = (transcript.source == "manual") if manual is None else manual
     register = "code" if code else "manual" if manual else "video"
-    key = f"{model}|{register}|{transcript.digest}"
+    if catalog:
+        register += "+catalog"
+    system = build_system_prompt(manual=manual, code=code, catalog=catalog)
+    # The prompt is part of the key: a changed prompt must not be served the
+    # reply an earlier prompt got for the same text.
+    prompt_digest = hashlib.sha256(system.encode("utf-8")).hexdigest()[:12]
+    key = f"{model}|{register}|{prompt_digest}|{transcript.digest}"
     if cache is not None:
         cached = cache.get(key)
         if cached is not None:
@@ -489,8 +552,7 @@ def extract(
             except ExtractionFailed:
                 pass  # an unusable cached reply behaves as a miss
 
-    system = build_system_prompt(manual=manual, code=code)
-    user = build_user_message(transcript, manual=manual, code=code)
+    user = build_user_message(transcript, manual=manual, code=code, catalog=catalog)
     reprompted = False
 
     for attempt in (0, 1):

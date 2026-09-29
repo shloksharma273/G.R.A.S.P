@@ -36,6 +36,9 @@ class GeneratorConfig:
     cache_enabled: bool
     auto_ingest: bool
     check_grounding: bool
+    #: Output budget for a split run's reference rulebook, which covers every
+    #: operation in the source and runs several times longer than one task's.
+    reference_max_tokens: int = 32000
 
     @property
     def accepts(self) -> tuple[str, ...]:
@@ -98,4 +101,18 @@ def load_generator_config(env: Mapping[str, str] | None = None) -> GeneratorConf
         cache_enabled=_flag(env, "RULEBOOK_CACHE", True),
         auto_ingest=_flag(env, "RULEBOOK_AUTO_INGEST", False),
         check_grounding=_flag(env, "RULEBOOK_CHECK_GROUNDING", True),
+        reference_max_tokens=_tokens(env, "RULEBOOK_REFERENCE_MAX_TOKENS", 32000),
     )
+
+
+def _tokens(env: Mapping[str, str], name: str, default: int) -> int:
+    raw = _clean(env, name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigError(f"{name} must be a whole number, got {raw!r}.", f"unset {name} for the default.") from None
+    if value < 1000:
+        raise ConfigError(f"{name} must be at least 1000, got {value}.", f"unset {name} for the default.")
+    return value

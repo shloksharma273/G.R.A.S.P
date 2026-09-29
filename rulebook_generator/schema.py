@@ -65,7 +65,10 @@ class Interface:
             return None
         kind = str(payload.get("kind", "")).strip().lower()
         name = str(payload.get("name", "")).strip().strip("`")
-        if not name:
+        if not name or any(ch.isspace() for ch in name):
+            # A service, topic, action or endpoint name never contains a space.
+            # One that does is a shell command - `source setup.bash && export ...`
+            # - which is something an operator types, not a call a program makes.
             return None
         if kind not in CALL_KINDS:
             kind = "service"

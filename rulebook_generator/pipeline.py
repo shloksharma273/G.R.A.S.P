@@ -81,6 +81,10 @@ STAGE_EXTRACTING = "reconstructing the rulebook"
 STAGE_RENDERING = "rendering the markdown"
 STAGE_VALIDATING = "running the validation gate"
 
+#: Gate issues that describe a reference rulebook rather than fault it: it is
+#: meant to be large and to span every task.
+CATALOG_EXEMPT = frozenset({"suspicious_size", "multiple_tasks"})
+
 
 def generate(
     transcript: Transcript,
@@ -88,8 +92,14 @@ def generate(
     provider: Provider | None = None,
     cache: PayloadCache | None = None,
     on_stage: Callable[[str], None] | None = None,
+    catalog: bool = False,
 ) -> GenerationResult:
     """Transcript in, validated rulebook out (FR-3 ... FR-7).
+
+    `catalog` asks for a reference rulebook of the whole system - every operation
+    the source describes - which `split.generate_split` then cuts into one
+    rulebook per task. Its size is the point, so the gate's "this is several tasks
+    fused together" checks do not apply to it.
 
     `on_stage` is told which stage is starting, so a caller that has to wait can
     say what it is waiting for. It is optional and purely observational - nothing
@@ -112,6 +122,7 @@ def generate(
             bounded, provider, config.llm.model, cache=cache,
             manual=bounded.source == "manual",
             code=bounded.source == "code",
+            catalog=catalog,
         )
     except NotProcedural as error:
         result.verdict = REJECT
@@ -149,7 +160,9 @@ def generate(
     # --- Stage 4: the validation gate --------------------------------------
     announce(STAGE_VALIDATING)
     report = validate(rulebook, markdown=result.markdown)
-    if extraction.multiple_tasks:
+    if catalog:
+        report.issues = [i for i in report.issues if i.code not in CATALOG_EXEMPT]
+    elif extraction.multiple_tasks:
         # Section 10: several recipes in one video is out of scope. The first
         # coherent task was taken; a human should confirm that was the right one.
         report.add(
@@ -160,18 +173,18 @@ def generate(
     if config.check_grounding:
         for issue in check_grounding(rulebook, bounded.text):
             report.issues.append(issue)
-        report.settle()
+    report.settle()
     result.report = report
     result.verdict = report.verdict
-
-    if result.verdict == ACCEPT:
-        result.reason = "passed every validation check"
-    elif result.verdict == FLAG:
-        result.reason = (
-            f"{len(report.issues)} issue(s) need a human eye before this is used"
-        )
-    else:
-        fatal = [i for i in report.issues if i.fatal]
-        result.reason = "; ".join(i.detail for i in fatal) or "failed validation"
-
+    result.reason = verdict_reason(report)
     return result
+
+
+def verdict_reason(report: ValidationReport) -> str:
+    """One line on why a rulebook got the verdict it did."""
+    if report.verdict == ACCEPT:
+        return "passed every validation check"
+    if report.verdict == FLAG:
+        return f"{len(report.issues)} issue(s) need a human eye before this is used"
+    fatal = [i for i in report.issues if i.fatal]
+    return "; ".join(i.detail for i in fatal) or "failed validation"
