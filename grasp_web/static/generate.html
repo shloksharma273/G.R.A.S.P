@@ -42,6 +42,8 @@
                    aria-label="Video link" />
             <button class="go" type="submit" id="go">Generate</button>
           </div>
+          <label class="split-toggle"><input type="checkbox" id="split" checked />
+            one rulebook per task — a reference of every step, then a rulebook cut out for each task</label>
           <label class="disclosure" id="toggle-paste">▸ no captions? paste a transcript instead</label>
           <textarea id="transcript" name="transcript" hidden
                     placeholder="Paste the spoken words here, one cue per line or as prose."
@@ -67,6 +69,7 @@
   </footer>
 
   <script src="/static/rulebook.js"></script>
+  <script src="/static/kgbuild.js"></script>
   <script src="/static/generate.js"></script>
 </body>
 </html>

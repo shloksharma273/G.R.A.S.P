@@ -372,4 +372,38 @@ function buildResult(result, stations) {
   return card;
 }
 
+// ---------------------------------------------- from rulebooks on disk ------
+
+/* Rulebooks already on disk -> one module -> AutoGraph -> PlanGraph. */
+async function fromDisk() {
+  let books = [];
+  try {
+    books = (await (await fetch("/api/generate/library")).json()).rulebooks || [];
+  } catch (error) { return; }
+  if (!books.length) return;
+  document.getElementById("from-disk").hidden = false;
+  const chosen = new Set();
+  const rows = document.getElementById("disk-rows");
+  const ticks = [];
+  for (const book of books) {
+    const row = el(`<div class="task-row"><label class="task-line">
+      <input type="checkbox" /><span class="task-name">${esc(book.name)}</span>
+      <span class="faint">${book.steps} steps</span></label></div>`);
+    const tick = row.querySelector("input");
+    ticks.push([tick, book.filename]);
+    tick.addEventListener("change", () => {
+      tick.checked ? chosen.add(book.filename) : chosen.delete(book.filename);
+      panel.refresh();
+    });
+    rows.appendChild(row);
+  }
+  document.getElementById("disk-all").addEventListener("click", () => {
+    for (const [tick, name] of ticks) { tick.checked = true; chosen.add(name); }
+    panel.refresh();
+  });
+  const panel = buildPanel({ files: () => [...chosen] });
+  document.getElementById("disk-panel").appendChild(panel.element);
+}
+
 boot();
+fromDisk();

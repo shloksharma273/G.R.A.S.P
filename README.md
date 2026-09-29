@@ -15,6 +15,7 @@ upstream that can author the rulebooks themselves from video.
 | 5 · Write | persist to the PlanGraph | built (`plangraph_writer/`) |
 | **Layer 2** · Planning | command → goal → subgraph → ordered `plan.json` | built (`layer2_planning/`) |
 | **Decomposition** · Compound commands | command → subtasks → one Layer 2 plan each → merged run | built (`task_decomposition/`) |
+| **AutoGraph pipeline** · Rulebooks → KG | upload a module, corpus → strategies → ontology → KG → PlanGraph over AutoGraph's API | built (`autograph_pipeline/`) |
 | **UI** · Web front end | discover projects, build their PlanGraph, ask in a browser | built (`grasp_web/`) |
 
 ---
@@ -95,6 +96,38 @@ into one 40-step "skill"; now it takes the first coherent task, sets
 `multiple_tasks`, and the gate flags it. It is still rejected — the model inferred
 a circular dependency between two onion-slicing steps — which is precisely the
 kind of plausible-looking nonsense that would have reached a robot without a gate.
+
+### One rulebook per task
+
+Layer 2 resolves a command to one skill and plans every step in that skill's
+scope, so a rulebook covering a whole robot can only ever produce one plan.
+`--split` (and the **one rulebook per task** toggle on both generator pages)
+builds them the way the OpenAMRobot rulebooks in `generated/` were written:
+
+```
+source ─► reference rulebook ─► tasks ─► one rulebook per task ─► the gate, each
+          every operation         the model picks them    cut out by following
+          (the model)             (guarded)               `requires` back (code)
+```
+
+```bash
+python generate_rulebook.py --transcript driver.txt --code --split --write
+```
+
+Only the first two passes are the model's. The slice is deterministic: a task's
+goal step, plus, for each state it requires, the first step in the reference
+that produces it, recursively. A task rulebook therefore can't gain a step the
+reference doesn't have, and it keeps the reference's names, states and execution
+handles exactly. Cut from `rulebook_operate_openamrobot.md`, it reproduces the
+steps of eleven of the hand-made task rulebooks exactly, and a test pins that.
+
+A guard checks the model's task list. It refuses a goal that isn't a step in the
+reference, a duplicate skill, and a skill named after one of its own steps (the
+two collapse into one vertex and the step silently drops out of the plan). A
+refused list is reprompted once, then replaced by one task per final step. A
+task can `assume` states the user already has: undocking starts docked. So the
+docking sequence isn't pulled in, and the assumption is written into the
+rulebook's overview instead of vanishing.
 
 ### Reproducibility
 
@@ -1026,6 +1059,109 @@ python demo_plan_offline.py                 # all six rulebooks, offline, no LLM
 
 ---
 
+## The AutoGraph pipeline — rulebooks to PlanGraph
+
+**One command from a folder of rulebooks to a plannable PlanGraph.** Every step
+before Station 1 used to be done by hand in the AutoGraph UI. This drives them
+through AutoGraph's own HTTP API, then hands the knowledge graph to the bridge:
+
+```
+rulebooks ─► File Manager ─► corpus graph ─► strategies ─► ontology ─► knowledge graph ─► PlanGraph
+             [project, category]   /corpus/builds  /analyze   PATCH     /orchestrate      Stations 1-5
+```
+
+```bash
+python build_kg.py generated/ --project openAMR --category nav            # dry run
+python build_kg.py generated/ --project openAMR --category nav --write    # build it
+python build_kg.py generated/ --project openAMR --category nav --write --rebuild
+python build_kg.py dataset/ --project kitchen --write --provision
+```
+
+**All the rulebooks go in one module.** The category is AutoGraph's unit of
+isolation: its files are clustered together and imported into one set of
+knowledge-graph partitions.
+
+**The ontology is applied, not hoped for.** The strategizer asks an LLM for 8-12
+entity types per cluster, but the bridge reads exactly four. So the pipeline runs
+it at `complexity: very_high`, which makes every cluster FullGraphRAG. At
+`moderate`, a one-cluster module rounds to zero FullGraphRAG clusters and
+extracts no entities at all. It then PATCHes each of the module's clusters to
+`[SKILL, PRIMITIVE, OBJECT, STATE]` before the importer runs. A cluster already
+imported under another ontology is reported, not patched, because a patch after
+import changes nothing.
+
+**Every stage reads before it acts.** The project overview says whether the
+corpus, the strategies and the knowledge graph are current for this category,
+and a stage whose work is done says so and moves on. So a rerun resumes, which
+matters here because AutoGraph refuses a full rebuild of a built category and
+answers an orchestration with nothing stale as a 409.
+
+| Stage | Reads | Acts |
+| --- | --- | --- |
+| connect | ACP project record → its AutoGraph service | `--provision`: create the project, deploy a service |
+| upload | File Manager, scope `[project, category]` | upload what is missing |
+| corpus | overview: `needs_corpus_update` | `POST /v1/corpus/builds`, poll |
+| strategize | overview: `categories_without_strategies` | `POST /v1/rag-strategizer/analyze`, poll |
+| ontology | `GET /v1/rag-strategizer/strategy` | `PATCH` each of the module's clusters |
+| kg | overview: `new_categories` | `POST /v1/orchestrate`, poll |
+| plangraph | — | `grasp_web.bridge.build`, Stations 1-5 |
+
+**A plain run writes nothing.** It connects, reads, and reports each stage as
+done, skipped, or what it would do. The rule is Station 5's, and it has more
+reason here: this uploads files, spends model tokens, and can deploy services.
+
+**Changing a built module needs `--rebuild`.** New or changed rulebooks for a
+category that is already built are refused rather than uploaded. AutoGraph never
+re-extracts a partition it has imported, so appending would build a corpus the
+knowledge graph never catches up with. `--rebuild` deletes the category first
+(`DELETE …/categories/{category}?delete_files=true`: corpus, strategies, KG
+partitions and files), then builds it from scratch. "Changed" is judged by the
+size File Manager reports, since that is the one comparison available without
+downloading every file.
+
+**One service per project.** An AutoGraph service is deployed for one
+`genai_project_name`, and ACP keeps the record after its release is deleted.
+The pipeline checks that the service's route actually answers. `--provision`
+redeploys it with the project's saved model settings, or copies them from
+`AUTOGRAPH_MODEL_FROM`. The embedding model is fixed for a project's lifetime,
+so it is never guessed.
+
+Labels follow the documented contract: bare category names everywhere. Older
+services matched the strategizer and orchestrator against the encoded module
+(`{project}_{category}`, with `_` inside a segment percent-encoded), so that is
+the fallback when a bare label is refused.
+
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AUTOGRAPH_SERVICE_PATH` | from ACP | talk to this service path instead of the project's own |
+| `AUTOGRAPH_COMPLEXITY` | `very_high` | share of clusters made FullGraphRAG |
+| `AUTOGRAPH_ONTOLOGY` | `SKILL,PRIMITIVE,OBJECT,STATE` | entity types each cluster extracts |
+| `AUTOGRAPH_REPLICAS` / `_MAX_RETRIES` | `1` / `3` | importer parallelism and retries |
+| `AUTOGRAPH_POLL_SECONDS` | `10` | status poll interval |
+| `AUTOGRAPH_{CORPUS,STRATEGIZE,ORCHESTRATE}_TIMEOUT` | 2 h / 1 h / 6 h | give up waiting (the work carries on server-side) |
+| `AUTOGRAPH_MODEL_FROM` | — | `--provision`: copy model settings from this project |
+| `AUTOGRAPH_FPS_RECOVERY_USERNAME` | — | `--provision`: an ArangoDB user with `rw` on the database; ACP refuses the install without one |
+
+It reads the same `ARANGO_URL` / `ARANGO_DB` and credentials as every station:
+ACP, File Manager and each AutoGraph service sit behind that one gateway, and a
+password is exchanged for a JWT that is renewed when a long build outlives it.
+
+### Exit codes
+
+`0` done, or a dry run completed · `2` configuration · `3` auth · `4` unreachable ·
+`10` a stage failed.
+
+### Verify
+
+```bash
+python -m unittest tests.test_autograph_pipeline   # no network: a fake platform answers the real requests
+```
+
+
+---
+
 ## Task decomposition — compound commands
 
 Layer 2 plans exactly one skill per command, so "go to 2,1 and then charge the
@@ -1127,6 +1263,9 @@ CLI cannot drift apart in what they answer.
 | `GET /api/projects` | every project in the database and the stage it has reached |
 | `POST /api/projects/build` | `{project}` → a build job id (**the one route that writes**) |
 | `GET /api/projects/build/<job>` | that build's state, stage and station reports |
+| `GET /api/kg/health` | whether rulebooks can be built through AutoGraph, and with what ontology |
+| `POST /api/kg/build` | `{job \| files, project, category, write, rebuild, provision}` → a run id |
+| `GET /api/kg/build/<job>` | that run: every stage's status, the running stage's latest message, a log |
 
 **Standard library only.** A handful of JSON routes do not justify a web
 framework, and `requirements.txt` still lists one required package.
@@ -1339,6 +1478,26 @@ settled" beside a model name would imply a request that never happened.
 `rulebook_generator`, for the same reason: no pipeline logic in the server, so the
 UI and the CLIs cannot disagree about what a build did.
 
+### Building a PlanGraph from generated rulebooks
+
+After a split generation, the page lists every task rulebook with its verdict.
+Accepted ones are ticked, flagged ones are left to you, and rejected ones can't
+be ticked. Under the list is a **Build the PlanGraph** panel, which also appears
+on the projects page for rulebooks already on disk. Name a project and a module,
+then:
+
+1. **Check** is a dry run of the AutoGraph pipeline. It reports each of its
+   seven stages as *already done* or *would run*, and writes nothing.
+2. **Build PlanGraph** is offered only for exactly the inputs that were checked.
+   It runs the pipeline as a job, and the page polls it. The running stage shows
+   its latest report (`55% Creating similarity edges…`,
+   `importing: 1/2 job(s)`), finished stages keep their outcome, and a log keeps
+   the rest.
+
+The browser names the rulebooks and never sends them. The server reads them from
+the finished generation job or from disk, so what reaches File Manager is exactly
+the markdown the gate graded.
+
 ### The palette
 
 Taken from arango.ai's own brand tokens — `#044926` deep green, `#b9ff38` lime,
@@ -1451,9 +1610,16 @@ kg_read_harness/          Station 1 — Read
   output.py     table + JSON listing, type-pair summary      (FR-6, FR-7)
   errors.py     typed failures, hints, exit codes            (FR-8)
   cli.py        one-shot entry point
+autograph_pipeline/       Rulebooks -> KG -> PlanGraph over AutoGraph's API
+  client.py     auth, ACP, File Manager, every AutoGraph route
+  config.py     complexity, ontology, polling, provisioning
+  pipeline.py   the seven stages, each resuming from the overview
+  plangraph.py  the last stage: grasp_web.bridge over the new KG
+  cli.py        entry point; dry run unless --write
 grasp_web/                Web front end
   api.py        a thin shell over Layer 2; no planning logic
   generate.py   the generator half: jobs, stages, the library
+  kgbuild.py    rulebooks -> AutoGraph -> PlanGraph as a polled job
   server.py     stdlib HTTP: the JSON routes plus the static pages
   cli.py        entry point
   static/       index.html · generate.html · app.css · app.js · generate.js
@@ -1469,6 +1635,7 @@ rulebook_generator/       Station 0 — Rulebook Generator
   config.py     model, strictness, auto-ingest
   cache.py      reproducibility by transcript hash                (FR-6)
   pipeline.py   the five stages
+  split.py      one rulebook per task: reference, task choice, slice
   direct.py     the shortcut: a rulebook file -> the PlanGraph
   report.py     the run summary
   cli.py        entry point · direct_cli.py  the ingest entry point
@@ -1523,6 +1690,7 @@ rule_preclassifier/       Station 2 — Rule Pre-Classifier
   report.py     the run summary                               (FR-7)
   cli.py        entry point; the only part that does I/O
 generate_rulebook.py       Station 0 launcher: a video link in, a rulebook out
+build_kg.py                rulebooks in, knowledge graph + PlanGraph out, via AutoGraph
 ingest_rulebook.py         a rulebook straight into the PlanGraph (skips AutoGraph)
 read_kg.py                 Station 1 launcher
 classify_kg.py             Station 2 launcher

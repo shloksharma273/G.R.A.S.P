@@ -248,7 +248,9 @@ async function run() {
     const response = await fetch("/api/repo/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: listing.url, ref: listing.ref, paths, mode: listing.mode }),
+      body: JSON.stringify({
+        url: listing.url, ref: listing.ref, paths, mode: listing.mode, split: $("split").checked,
+      }),
     });
     const job = await response.json();
     if (job.error) throw new Error(job.error + (job.hint ? ` — ${job.hint}` : ""));
@@ -259,7 +261,7 @@ async function run() {
     if (done.state === "error") {
       running.card.replaceWith(errorCard(done.error));
     } else {
-      running.card.replaceWith(resultCard(done.result));
+      running.card.replaceWith(finishedCard(done));
       turn.appendChild(coverageNotes(done.detail || {}));
     }
   } catch (error) {
@@ -269,6 +271,17 @@ async function run() {
 
   busy = false;
   updatePicked();
+}
+
+/* A finished generation: a split one as its task list, a single one as its gate
+   result - either way followed by the panel that builds it into a PlanGraph. */
+function finishedCard(done) {
+  if (done.result && done.result.kind === "split") return splitResultCard(done.result, done.id);
+  const box = el(`<div class="split"></div>`);
+  box.appendChild(resultCard(done.result));
+  const panel = singleBuildPanel(done.result, done.id);
+  if (panel) box.appendChild(panel);
+  return box;
 }
 
 /* What became of the selection.

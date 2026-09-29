@@ -52,6 +52,8 @@
               <span><b>source code</b> what a program calls — services, topics, actions</span>
             </label>
           </div>
+          <label class="split-toggle"><input type="checkbox" id="split" checked />
+            one rulebook per task — a reference of every step, then a rulebook cut out for each task</label>
           <div class="examples" id="examples"></div>
         </form>
 
@@ -73,13 +75,15 @@
 
   <footer>
     <div class="hint" style="max-width:62rem;margin:0 auto;">
-      One rulebook describes <b>one procedure</b> — pick the pages that describe it, not the
-      whole guide. Verdicts: <b>accept</b> passed every check · <b>flag</b> wants a human eye ·
+      With <b>one rulebook per task</b> on, pick every page the robot's operations are on;
+      each task is cut out of one reference rulebook. Off, one rulebook describes
+      <b>one procedure</b> — pick only its pages. Verdicts: <b>accept</b> passed every check · <b>flag</b> wants a human eye ·
       <b>reject</b> a cycle or a broken round-trip.
     </div>
   </footer>
 
   <script src="/static/rulebook.js"></script>
+  <script src="/static/kgbuild.js"></script>
   <script src="/static/repo.js"></script>
 </body>
 </html>

@@ -175,8 +175,12 @@ class GeneratorService:
         prepare_stage: str = STAGE_FETCHING,
         source_label: str = "",
         register: str = "manual",
+        split: bool = False,
     ) -> dict[str, Any]:
         """Begin a generation. Returns the job to poll.
+
+        `split` generates a reference rulebook of the whole source and cuts one
+        rulebook per task out of it (see `rulebook_generator.split`).
 
         `prepare` is for a source that has to be assembled before it can be read -
         a set of pages from a documentation repo, say. It runs inside the job
@@ -211,7 +215,7 @@ class GeneratorService:
 
         thread = threading.Thread(
             target=self._run,
-            args=(job, url, transcript_text, prepare, prepare_stage, register),
+            args=(job, url, transcript_text, prepare, prepare_stage, register, split),
             daemon=True,
         )
         thread.start()
@@ -230,9 +234,11 @@ class GeneratorService:
         prepare: Callable[[], dict[str, Any]] | None = None,
         prepare_stage: str = STAGE_FETCHING,
         register: str = "manual",
+        split: bool = False,
     ) -> None:
         from rulebook_generator.cache import PayloadCache
         from rulebook_generator.pipeline import generate
+        from rulebook_generator.split import generate_split
         from rulebook_generator.transcript import Transcript, clean, from_youtube
 
         try:
@@ -274,7 +280,8 @@ class GeneratorService:
             else:
                 transcript = from_youtube(url)
 
-            result = generate(
+            run = generate_split if split else generate
+            result = run(
                 transcript,
                 config,
                 provider=self.provider,
@@ -282,12 +289,15 @@ class GeneratorService:
                 on_stage=lambda stage: setattr(job, "stage", stage),
             )
 
-            job.result = self._serialize(result, config)
+            job.result = (
+                self._serialize_split(result, config) if split else self._serialize(result, config)
+            )
+            reference = job.result.get("reference", job.result) if split else job.result
             if prepare is not None and job.detail.get("paths"):
                 job.detail["unused"] = unused_pages(
                     transcript.text,
                     list(job.detail["paths"]),
-                    (job.result.get("extraction") or {}).get("intermediate"),
+                    (reference.get("extraction") or {}).get("intermediate"),
                 )
             job.state = STATE_DONE
 
@@ -315,6 +325,64 @@ class GeneratorService:
             f"rulebook_{result.rulebook.skill}.md" if result.rulebook else "rulebook.md"
         )
         return payload
+
+    @classmethod
+    def _serialize_split(cls, split: Any, config: Any) -> dict[str, Any]:
+        """A reference rulebook and the task rulebooks cut from it."""
+        tasks = [cls._serialize(task, config) for task in split.tasks]
+        return {
+            "kind": "split",
+            "reference": cls._serialize(split.reference, config),
+            "tasks": tasks,
+            "method": split.choice.method if split.choice else None,
+            "reprompted": bool(split.choice and split.choice.reprompted),
+            "fallback_reason": split.choice.fallback_reason if split.choice else "",
+            "assumes": {
+                task.skill: list(task.assumes) for task in (split.choice.tasks if split.choice else [])
+            },
+            "reason": split.reason,
+            "accepted": sum(1 for t in tasks if t["verdict"] == "accept"),
+        }
+
+    def rulebook_files(self, job_id: str, filenames: list[str]) -> list[tuple[str, str]]:
+        """The markdown of chosen rulebooks from a finished generation.
+
+        The build reads them from here rather than from the browser, so what is
+        uploaded to AutoGraph is exactly what the gate graded.
+        """
+        job = self._jobs.get(job_id)
+        if job is None or job.state != STATE_DONE or not job.result:
+            raise HarnessError(
+                "that generation is not available any more.",
+                "generate the rulebooks again; finished generations are kept only for a while.",
+            )
+        result = job.result
+        books = (
+            [result["reference"], *result["tasks"]] if result.get("kind") == "split" else [result]
+        )
+        by_name = {b["filename"]: b["markdown"] for b in books if b.get("markdown")}
+        missing = [name for name in filenames if name not in by_name]
+        if missing:
+            raise HarnessError(
+                "the generation has no rulebook named " + ", ".join(missing) + ".",
+                "choose from the rulebooks the generation produced.",
+            )
+        return [(name, by_name[name]) for name in filenames]
+
+    def library_files(self, filenames: list[str]) -> list[tuple[str, str]]:
+        """The markdown of chosen rulebooks already on disk, by file name only.
+
+        Names are matched against the directory listing rather than joined onto a
+        path, so a name like `../.env` can never be read.
+        """
+        on_disk = {row["filename"]: row["markdown"] for row in self.rulebooks()}
+        missing = [name for name in filenames if name not in on_disk]
+        if missing:
+            raise HarnessError(
+                "no rulebook on disk is named " + ", ".join(missing) + ".",
+                "choose from the rulebooks listed on the page.",
+            )
+        return [(name, on_disk[name]) for name in filenames]
 
     # --- what has already been generated ------------------------------------
 

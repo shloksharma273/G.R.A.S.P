@@ -27,20 +27,49 @@
     <div class="wrap">
 
       <section class="welcome" id="welcome">
-        <h1>Every project in this <em>database</em>.</h1>
+        <h1>From rulebooks to a robot that takes <em>orders</em>.</h1>
         <p>
-          You build the corpus graph and the knowledge graph in AutoGraph. This page
-          picks it up from there: once a project has a knowledge graph, it can be
-          turned into a PlanGraph — typed, ordered, and scoped per skill — and once
-          it has one, you can ask it for a plan in plain English.
+          Every project here goes through the same four stages. Build them all from this
+          page: tick rulebooks, name a project, check it, build. Or pick a project up at
+          whichever stage it has already reached in AutoGraph. Each card below shows how
+          far a project has got and what comes next.
         </p>
 
-        <ol class="pipeline">
-          <li><span class="n">1</span> corpus graph <em>AutoGraph</em></li>
-          <li><span class="n">2</span> knowledge graph <em>AutoGraph</em></li>
-          <li><span class="n">3</span> PlanGraph <em>here</em></li>
-          <li><span class="n">4</span> ask for a plan <em>here</em></li>
+        <ol class="pipeline stages-4">
+          <li>
+            <span class="n">1</span>
+            <b>Corpus graph</b> <em>AutoGraph · or here</em>
+            <p>Your rulebooks are uploaded as one module, embedded, linked by similarity
+              and clustered. This is the map of what you gave it.</p>
+          </li>
+          <li>
+            <span class="n">2</span>
+            <b>Knowledge graph</b> <em>AutoGraph · or here</em>
+            <p>Each cluster is read for four kinds of entity — skills, primitives,
+              objects and states — and the relationships between them.</p>
+          </li>
+          <li>
+            <span class="n">3</span>
+            <b>PlanGraph</b> <em>here</em>
+            <p>Those relationships become preconditions, effects and an order, one scoped
+              subgraph per skill. This is the only stage that writes, so it is checked first.</p>
+          </li>
+          <li>
+            <span class="n">4</span>
+            <b>Ask for a plan</b> <em>here</em>
+            <p>Type a command in plain English and get back the ordered steps, each with
+              the service, topic or action that runs it.</p>
+          </li>
         </ol>
+      </section>
+
+      <section id="from-disk" hidden>
+        <div class="card tasks">
+          <div class="md-head"><span class="t">new PlanGraph from rulebooks on disk</span>
+            <span class="acts"><button class="mini" type="button" id="disk-all">tick all</button></span></div>
+          <div class="task-rows" id="disk-rows"></div>
+        </div>
+        <div id="disk-panel"></div>
       </section>
 
       <section id="projects">
@@ -73,5 +102,6 @@
   </footer>
 
   <script src="/static/projects.js"></script>
+  <script src="/static/kgbuild.js"></script>
 </body>
 </html>

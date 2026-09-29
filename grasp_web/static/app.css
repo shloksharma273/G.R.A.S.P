@@ -858,3 +858,140 @@ pre.md .b { color: var(--mint); }
 .call .handle { font-family: var(--mono); color: var(--lime); word-break: break-all; }
 .call .type { font-family: var(--mono); color: var(--text-faint); font-size: .7rem; }
 .call .none { color: var(--amber); font-size: .74rem; }
+
+/* ------------------------------------------ split rulebooks + KG build --- */
+
+.split { display: grid; gap: .7rem; }
+.split-note p { margin: 0 0 .4rem; font-size: .84rem; color: var(--text-dim); }
+.warn-line { color: var(--amber) !important; }
+.faint { color: var(--text-faint); }
+
+.task-rows { padding: .2rem 0; }
+.task-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .3rem .6rem;
+  align-items: center;
+  padding: .45rem 1.1rem;
+  border-bottom: 1px solid rgba(42, 55, 66, .4);
+}
+.task-row:last-child { border-bottom: 0; }
+.task-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .6rem; cursor: pointer; font-size: .82rem; }
+.task-line input { accent-color: var(--lime); cursor: pointer; }
+.task-line input:disabled { cursor: not-allowed; }
+.task-name { font-family: var(--mono); color: var(--text); }
+.task-steps { flex-basis: 100%; padding-left: 1.5rem; font-family: var(--mono); font-size: .72rem; color: var(--text-faint); }
+.task-assumes { flex-basis: 100%; padding-left: 1.5rem; font-size: .72rem; color: var(--amber); }
+.task-detail { grid-column: 1 / -1; }
+.task-detail > .card { margin: .4rem 0 .2rem; }
+
+.card.kg .card-body p { font-size: .84rem; color: var(--text-dim); margin: 0 0 .7rem; }
+.card.kg code { font-family: var(--mono); font-size: .74rem; color: var(--mint); }
+.kg-form { display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center; margin-bottom: .7rem; }
+.kg-form label { font-size: .76rem; color: var(--text-dim); display: flex; align-items: center; gap: .4rem; }
+.kg-form input:not([type]) {
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: .8rem;
+  padding: .35rem .55rem;
+  width: 12rem;
+}
+.kg-form input:not([type]):focus { outline: none; border-color: var(--lime); }
+.kg-opt input { accent-color: var(--lime); }
+.kg-acts { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.kg-acts .kg-why { font-size: .74rem; }
+.card.kg .go.small {
+  background: var(--lime);
+  color: #0b1a06;
+  border: 0;
+  border-radius: 6px;
+  font-weight: 650;
+  font-size: .78rem;
+  padding: .38rem .9rem;
+  cursor: pointer;
+}
+.card.kg .go.small:disabled { opacity: .35; cursor: default; }
+
+.kg-run { border-top: 1px solid var(--line); }
+.kg-stages { padding: .2rem 0 .4rem; }
+.kg-stage {
+  display: grid;
+  grid-template-columns: 1.2rem 14rem 1fr;
+  gap: .5rem;
+  align-items: baseline;
+  padding: .32rem 1.1rem;
+  font-size: .8rem;
+}
+.kg-stage .kg-name { color: var(--text-dim); }
+.kg-stage .kg-detail { color: var(--text-faint); font-size: .76rem; word-break: break-word; }
+.kg-stage .kg-mark { font-size: .75rem; color: var(--text-faint); }
+.kg-stage .spin {
+  display: inline-block;
+  width: .7rem; height: .7rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--lime);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+.kg-stage.running .kg-name { color: var(--lime); }
+.kg-stage.running .kg-detail { color: var(--text-dim); }
+.kg-stage.done .kg-mark { color: var(--mint); }
+.kg-stage.done .kg-name { color: var(--text); }
+.kg-stage.done .kg-detail { color: var(--text-dim); }
+.kg-stage.skipped .kg-name { color: var(--text-dim); }
+.kg-stage.planned .kg-mark, .kg-stage.planned .kg-detail { color: var(--amber); }
+.kg-stage.failed .kg-mark, .kg-stage.failed .kg-name { color: #ff8c8c; }
+.kg-stage.failed .kg-detail { color: #ffb3b3; }
+.kg-progress > .clean, .kg-progress > .issues, .kg-progress > .card { margin: .6rem 1.1rem .2rem; }
+.kg-progress .clean .mini { margin-left: .4rem; text-decoration: none; }
+.kg-log { padding: 0 1.1rem .7rem; font-size: .74rem; color: var(--text-faint); }
+.kg-log summary { cursor: pointer; }
+.kg-log pre { font-family: var(--mono); white-space: pre-wrap; max-height: 14rem; overflow: auto; margin: .4rem 0 0; }
+.split-toggle { font-size: .78rem; color: var(--text-dim); display: flex; gap: .45rem; align-items: center; margin: .2rem 0; }
+.split-toggle input { accent-color: var(--lime); }
+
+@media (max-width: 640px) {
+  .kg-stage { grid-template-columns: 1.2rem 1fr; }
+  .kg-stage .kg-detail { grid-column: 2; }
+  .kg-form input:not([type]) { width: 100%; }
+  .kg-form label { flex-basis: 100%; }
+}
+
+#from-disk { display: grid; gap: .7rem; margin-bottom: 1.4rem; }
+#from-disk[hidden] { display: none; }
+#from-disk .card, .split .card { margin: 0; }
+
+/* The lime button, wherever it appears. It was scoped to the generator forms, so
+   the projects page's "Ask for a plan" link rendered as a bare browser link. */
+.actions .go.small {
+  background: var(--lime);
+  color: #0b1a06;
+  border: 0;
+  border-radius: 6px;
+  font-weight: 650;
+  font-size: .78rem;
+  padding: .38rem .9rem;
+  cursor: pointer;
+}
+
+/* The projects page's four stages, as short cards rather than pills. */
+.pipeline.stages-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .6rem;
+}
+.pipeline.stages-4 li {
+  display: block;
+  border-radius: var(--radius);
+  padding: .7rem .8rem .75rem;
+  background: rgba(21, 29, 37, .6);
+}
+.pipeline.stages-4 li b { color: var(--text); font-size: .82rem; font-weight: 600; margin-left: .3rem; }
+.pipeline.stages-4 li em { display: block; margin: .15rem 0 .35rem 1.55rem; }
+.pipeline.stages-4 li p { margin: 0; font-size: .74rem; line-height: 1.5; color: var(--text-dim); }
+@media (max-width: 860px) { .pipeline.stages-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .pipeline.stages-4 { grid-template-columns: 1fr; } }
+.kg-form .kg-fps[hidden] { display: none; }

@@ -115,16 +115,14 @@ async function run() {
     const response = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, transcript: pasted }),
+      body: JSON.stringify({ url, transcript: pasted, split: $("split").checked }),
     });
     const job = await response.json();
     if (job.error) throw new Error(job.error + (job.hint ? ` — ${job.hint}` : ""));
 
     const done = await pollJob(job.id, (stage) => running.stage(stage));
     running.stop();
-    running.card.replaceWith(
-      done.state === "error" ? errorCard(done.error) : resultCard(done.result)
-    );
+    running.card.replaceWith(done.state === "error" ? errorCard(done.error) : finishedCard(done));
   } catch (error) {
     running.stop();
     running.card.replaceWith(errorCard(String(error.message || error)));
@@ -132,6 +130,17 @@ async function run() {
 
   busy = false;
   go.disabled = false;
+}
+
+/* A finished generation: a split one as its task list, a single one as its gate
+   result - either way followed by the panel that builds it into a PlanGraph. */
+function finishedCard(done) {
+  if (done.result && done.result.kind === "split") return splitResultCard(done.result, done.id);
+  const box = el(`<div class="split"></div>`);
+  box.appendChild(resultCard(done.result));
+  const panel = singleBuildPanel(done.result, done.id);
+  if (panel) box.appendChild(panel);
+  return box;
 }
 
 function showSaved(book) {

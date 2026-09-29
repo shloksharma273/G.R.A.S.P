@@ -24,6 +24,9 @@ Routes:
     GET  /api/projects           every project in the database and its stage
     POST /api/projects/build     build one project's PlanGraph, get a job id
     GET  /api/projects/build/<j> poll that build
+    GET  /api/kg/health          whether rulebooks can be built into a PlanGraph
+    POST /api/kg/build           rulebooks -> AutoGraph -> PlanGraph, get a job id
+    GET  /api/kg/build/<job>     poll that run, stage by stage
 
 Generation is slow enough to need a job: the POST starts one and returns
 immediately, and the page polls for the stage it has reached.
@@ -45,6 +48,7 @@ from . import __version__
 from .api import PlannerRegistry, PlannerService
 from .builder import BuildService
 from .generate import STAGE_READING_REPO, GeneratorService
+from .kgbuild import KnowledgeBuildService
 from .repo import RepoBrowser, RepoError
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -137,6 +141,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/api/projects/build/"):
             job = builder.status(path[len("/api/projects/build/") :])
             self._json(job if job else {"error": "no such build"}, 200 if job else 404)
+        elif path == "/api/kg/health":
+            self._json(self.server.kgbuild.health())  # type: ignore[attr-defined]
+        elif path.startswith("/api/kg/build/"):
+            run = self.server.kgbuild.status(path[len("/api/kg/build/") :])  # type: ignore[attr-defined]
+            self._json(run if run else {"error": "no such run"}, 200 if run else 404)
         elif path == "/api/generate/health":
             self._json(generator.health())
         elif path == "/api/generate/library":
@@ -157,6 +166,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/repo/tree",
             "/api/repo/generate",
             "/api/projects/build",
+            "/api/kg/build",
         ):
             self._json({"error": f"no route for {path}"}, 404)
             return
@@ -184,7 +194,18 @@ class Handler(BaseHTTPRequestHandler):
             started = generator.start(
                 url=str(payload.get("url", "")),
                 transcript_text=str(payload.get("transcript", "")),
+                split=bool(payload.get("split")),
             )
+            self._json(started, 400 if started.get("error") else 200)
+            return
+
+        if path == "/api/kg/build":
+            kgbuild: KnowledgeBuildService = self.server.kgbuild  # type: ignore[attr-defined]
+            started = kgbuild.start(payload)
+            registry: PlannerRegistry | None = getattr(self.server, "registry", None)
+            if registry is not None and payload.get("write") and not started.get("error"):
+                # The PlanGraph this run writes is exactly what a cached planner holds.
+                registry.invalidate(str(payload.get("project", "")))
             self._json(started, 400 if started.get("error") else 200)
             return
 
@@ -249,6 +270,7 @@ class Handler(BaseHTTPRequestHandler):
                 prepare_stage=STAGE_READING_REPO,
                 source_label=f"{reference} \u2014 {len(chosen)} file(s)",
                 register="code" if mode == "code" else "manual",
+                split=bool(payload.get("split")),
             )
             self._json(started, 400 if started.get("error") else 200)
         except RepoError as error:
@@ -266,12 +288,17 @@ def make_server(
     browser: RepoBrowser | None = None,
     builder: BuildService | None = None,
     registry: PlannerRegistry | None = None,
+    kgbuild: KnowledgeBuildService | None = None,
 ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), Handler)
     server.service = service  # type: ignore[attr-defined]
     server.registry = registry  # type: ignore[attr-defined]
     server.builder = builder or BuildService()  # type: ignore[attr-defined]
     server.generator = generator or GeneratorService()  # type: ignore[attr-defined]
+    server.kgbuild = kgbuild or KnowledgeBuildService(  # type: ignore[attr-defined]
+        job_files=server.generator.rulebook_files,  # type: ignore[attr-defined]
+        library_files=server.generator.library_files,  # type: ignore[attr-defined]
+    )
     server.browser = browser or RepoBrowser()  # type: ignore[attr-defined]
     server.quiet = quiet  # type: ignore[attr-defined]
     server.daemon_threads = True
